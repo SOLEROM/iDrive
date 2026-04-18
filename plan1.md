@@ -1298,9 +1298,3 @@ Before coding, first generate:
 8. Makefile design
 9. phased implementation plan
 
-Then implement phase by phase.
-```
-
-If you want, I can turn this into a ready repo starter pack with the actual files:
-`SPEC.md`, `ARCHITECTURE.md`, `CONFIG_MODEL.md`, `BUILD_AND_RELEASE.md`, and a first `Makefile` skeleton.
-

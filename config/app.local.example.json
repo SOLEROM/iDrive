@@ -1,0 +1,39 @@
+{
+  "_comment": "App-local config — device only, never synced. Copy to app.local.json and customize.",
+  "themeMode": "SYSTEM",
+  "language": "SYSTEM",
+  "defaultLandingScreen": "DASHBOARD",
+  "syncOnAppOpen": true,
+  "backgroundSyncEnabled": true,
+  "backgroundSyncIntervalMinutes": 30,
+  "showCompletedRidesByDefault": false,
+  "compactCardMode": false,
+  "vibrateOnReminder": true,
+  "soundOnReminder": true,
+  "notificationLeadTimeMinutesDefault": 60,
+  "allowMobileDataSync": true,
+  "debugLoggingEnabled": false,
+  "lastSelectedGroupId": null,
+  "uiPreferences": {
+    "showChildColorBadges": true,
+    "showLargeDateHeaders": true,
+    "dashboardDensity": "COMFORTABLE",
+    "homeCardOrder": ["TODAY_RIDES", "URGENT_UNASSIGNED", "MY_ACCEPTED", "RECENT_UPDATES", "UPCOMING_CLASSES"],
+    "hideEmptySections": true,
+    "showRecentActivityFeed": true,
+    "showConflictBanner": true,
+    "showSyncBanner": true,
+    "use24HourClock": false
+  },
+  "syncConfig": {
+    "syncOnStartup": true,
+    "syncOnResume": true,
+    "syncOnMutation": true,
+    "syncRetryCount": 5,
+    "syncRetryBackoffSeconds": 30,
+    "syncBatchSize": 50,
+    "maxOfflineQueueSize": 500,
+    "requireWifiForLargeSync": false,
+    "localCacheRetentionDays": 90
+  }
+}

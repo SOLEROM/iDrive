@@ -1,0 +1,16 @@
+# Keep the image-build context small; mount workspace at runtime instead.
+.git/
+.gradle/
+.gradle-docker/
+build/
+app/build/
+dist/
+artifacts/
+keystore/
+*.apk
+*.aab
+*.log
+.idea/
+*.iml
+local.properties
+signing.local.properties
