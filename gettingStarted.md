@@ -40,29 +40,53 @@ npm install
 
 ---
 
-## 2. Run the dev server
+## 2. Run the app
+
+The repo ships a `run.sh` helper with three modes:
 
 ```bash
-npm run dev
+./run.sh              # (default) DEV: HTTPS Vite dev server on :5173, HMR on
+./run.sh --prod       # PROD: build + HTTPS preview of dist/ on :4173 (SW + manifest)
+./run.sh --cloud      # CLOUD: build + Cloudflare quick tunnel — public HTTPS URL
+./run.sh --help       # usage
 ```
 
-Opens at [http://localhost:5173](http://localhost:5173). Hot-reload is on.
+Equivalent npm scripts if you prefer:
+
+```bash
+npm run dev           # plain HTTP dev on :5173 (no SW)
+npm run dev:https     # HTTPS dev on :5173
+npm run preview       # HTTP preview of built dist/ on :4173
+npm run preview:https # HTTPS preview of built dist/ on :4173
+```
 
 On first visit you'll see the sign-in screen; this build uses a local
 mock (no real OAuth yet), so enter any name + email and continue.
 
-### Test on a phone
+### Test on a phone — three paths, ranked by ease
 
-The dev server binds to your LAN (`host: true`). From the same Wi-Fi:
+1. **`./run.sh --cloud`** — the only path that reliably shows Chrome's
+   **"Install app"** option. Cloudflare gives you a real HTTPS URL with a
+   trusted cert. Works on any network (phone doesn't need to be on your
+   Wi-Fi). No setup on the phone. Script stays alive with a 5-second
+   health-check loop; Ctrl+C tears down tunnel + preview.
+2. **`./run.sh --prod`** then open `https://<your-LAN-IP>:4173` on the
+   phone. Self-signed cert — Chrome marks the origin as untrusted, which
+   silently suppresses the install prompt. You can still use the app and
+   *"Add to Home screen"*, but not a proper PWA install. Works offline
+   once loaded.
+3. **`adb reverse tcp:4173 tcp:4173`** then open `http://localhost:4173`
+   on a USB-connected phone. Chrome trusts `localhost` for install
+   purposes, so the prompt appears. Needs USB debugging enabled.
+
+### Regenerating app icons
+
+PNG icons are derived from the SVGs in `public/icons/`. If you edit the
+SVGs, run:
 
 ```bash
-# find the LAN IP the server prints, e.g. http://192.168.1.42:5173
+npm run icons         # regenerates icon-{192,512,maskable}.png via sharp
 ```
-
-iOS Safari **requires HTTPS** for service workers to register. Two options:
-
-1. **Use production preview over HTTPS**: `npm run build && npx vite preview --https`
-2. **Expose via a tunnel**: `npx serveo` / `cloudflared tunnel` / `ngrok`.
 
 ---
 
@@ -113,12 +137,14 @@ Output is a static bundle ready for any CDN or static host. Artefacts:
 - `dist/assets/*.js` / `*.css` — hashed bundles
 - `dist/sw.js` + `dist/workbox-*.js` — Workbox service worker
 - `dist/manifest.webmanifest` — installable PWA manifest
-- `dist/icons/*` — app icons (SVG)
+- `dist/icons/*` — app icons (PNG for Chrome installability, SVG for scalable)
 
 Preview the production build locally:
 
 ```bash
-npm run preview       # http://localhost:4173
+npm run preview       # http://localhost:4173  (HTTP, no cert)
+./run.sh --prod       # https://<LAN-IP>:4173   (HTTPS via self-signed cert)
+./run.sh --cloud      # https://<random>.trycloudflare.com  (HTTPS, trusted cert)
 ```
 
 ---
@@ -173,11 +199,25 @@ the 404 fallback so client-side routing works.
 
 ## 6. Installing the app
 
+### Local testing (before you deploy)
+
+The quickest way to test install on your own phone is
+`./run.sh --cloud` — it starts a Cloudflare quick tunnel so Chrome sees a
+real HTTPS origin with a trusted cert, which unlocks the **"Install app"**
+prompt. Once logged in you'll also see an **Install app** button in
+Settings → About (wired via `beforeinstallprompt`).
+
 ### Android (Chrome)
 
-1. Visit the deployed URL
-2. Browser prompts "Install app" (or use menu → *Install app*)
-3. Launches standalone, no URL bar, shows up in the app drawer
+1. Visit the deployed URL (or the tunnel URL from `--cloud`)
+2. Wait ~5–10s for the service worker to register
+3. Chrome menu (⋮) → **"Install app"** (or use the in-app button in
+   Settings → About)
+4. Launches standalone, no URL bar, shows up in the app drawer
+
+If you only see **"Add to Home screen"** and not **"Install app"**, the
+origin isn't trusted (self-signed cert) — Chrome silently blocks the
+install prompt. Use `./run.sh --cloud` or deploy to a real HTTPS host.
 
 ### iPhone / iPad (Safari)
 
@@ -244,8 +284,11 @@ respect.
 
 | Symptom | Cause |
 |---|---|
-| Service worker doesn't register | Not HTTPS (or not `localhost`). Use `vite preview --https` or a tunnel. |
-| Install prompt never appears on Android | Need a valid manifest + HTTPS + a service worker. Check DevTools → Application → Manifest. |
+| Service worker doesn't register | Not HTTPS (or not `localhost`). Use `./run.sh --prod` or `./run.sh --cloud`. |
+| "Add to Home screen" appears but not "Install app" | Origin is untrusted (self-signed cert). Use `./run.sh --cloud` for a trusted tunnel URL. |
+| Install prompt never appears on Android | Need a valid manifest + trusted HTTPS + a registered service worker. Check DevTools → Application → Manifest for the failing criterion. |
+| `Blocked request. This host ("…trycloudflare.com") is not allowed` | Vite 5 guards `preview.allowedHosts`. Already set to `true` in `vite.config.ts`; restart the preview after pulling. |
+| Tunnel URL returns "can't connect" | The script has exited — the tunnel dies with it. Keep `./run.sh --cloud` running in its terminal. |
 | iOS shows Safari chrome after "Add to Home Screen" | `apple-mobile-web-app-capable` meta missing — already set in `index.html`; verify it's being served. |
 | `dexie` throws `DatabaseClosedError` in tests | Tests share the Dexie singleton — `__resetDb()` in `tests/setup.ts` clears it between tests. |
 | Old cached bundle stuck after deploy | Service worker auto-updates on next visit, but the *current* tab needs a reload. Hard refresh or close/reopen. |

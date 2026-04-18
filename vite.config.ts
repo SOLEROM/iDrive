@@ -64,10 +64,13 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    // allow tunnels (Cloudflare, ngrok) + any host — dev/preview is local-only
+    allowedHosts: true,
   },
   preview: {
     host: true,
     port: 4173,
+    allowedHosts: true,
   },
   test: {
     globals: true,

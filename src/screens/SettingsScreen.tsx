@@ -2,9 +2,11 @@ import { Header } from "@/components/Header";
 import { useApp } from "@/state/AppContext";
 import { AppLanguage, LandingScreen, ThemeMode } from "@/domain/enums";
 import type { AppLocalConfig } from "@/domain/config";
+import { useInstallPrompt } from "@/lib/useInstallPrompt";
 
 export function SettingsScreen() {
   const { parent, signOut, config, setConfig, sync, syncState } = useApp();
+  const { canInstall, install } = useInstallPrompt();
 
   const set = <K extends keyof AppLocalConfig>(k: K, v: AppLocalConfig[K]) =>
     setConfig({ [k]: v } as Partial<AppLocalConfig>);
@@ -56,7 +58,15 @@ export function SettingsScreen() {
         <div className="card">
           <h2 style={{ marginTop: 0 }}>About</h2>
           <p>Kids Rides & Classes PWA · v0.1.0</p>
-          <p>Installable from your browser's "Add to Home Screen" menu.</p>
+          {canInstall ? (
+            <button className="btn btn--full" style={{ marginTop: 8 }} onClick={install}>
+              Install app
+            </button>
+          ) : (
+            <p className="chip chip--muted" style={{ textAlign: "center" }}>
+              Already installed or not supported on this browser.
+            </p>
+          )}
         </div>
 
         <button className="btn btn--danger btn--full" onClick={signOut} style={{ marginTop: 16 }}>
