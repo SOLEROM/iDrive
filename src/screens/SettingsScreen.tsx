@@ -1,15 +1,35 @@
+import { useState } from "react";
 import { Header } from "@/components/Header";
 import { useApp } from "@/state/AppContext";
 import { AppLanguage, LandingScreen, ThemeMode } from "@/domain/enums";
-import type { AppLocalConfig } from "@/domain/config";
+import { type AppLocalConfig } from "@/domain/config";
 import { useInstallPrompt } from "@/lib/useInstallPrompt";
 
 export function SettingsScreen() {
-  const { parent, signOut, config, setConfig, sync, syncState } = useApp();
+  const { parent, config, fileHandle, setConfig, closeFile, downloadFile } = useApp();
   const { canInstall, install } = useInstallPrompt();
+  const isStandalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    !!(navigator as Navigator & { standalone?: boolean }).standalone;
+  const ua = navigator.userAgent;
+  const isIOS = /iphone|ipad|ipod/i.test(ua);
+  const isIOSChrome = isIOS && /CriOS/i.test(ua);
+  const isIOSSafari = isIOS && !isIOSChrome;
+  const [newLocation, setNewLocation] = useState("");
 
   const set = <K extends keyof AppLocalConfig>(k: K, v: AppLocalConfig[K]) =>
     setConfig({ [k]: v } as Partial<AppLocalConfig>);
+
+  const addLocation = () => {
+    const loc = newLocation.trim();
+    if (!loc || config.globalLocations.includes(loc)) return;
+    setNewLocation("");
+    set("globalLocations", [...config.globalLocations, loc]);
+  };
+
+  const removeLocation = (loc: string) => {
+    set("globalLocations", config.globalLocations.filter((l) => l !== loc));
+  };
 
   return (
     <>
@@ -44,33 +64,79 @@ export function SettingsScreen() {
         </div>
 
         <div className="card">
-          <h2 style={{ marginTop: 0 }}>Sync</h2>
-          <p>Status: <span className="chip">{syncState.status}</span></p>
-          <label className="row" style={{ marginTop: 6 }}>
-            <input type="checkbox" checked={config.backgroundSyncEnabled}
-              onChange={(e) => set("backgroundSyncEnabled", e.target.checked)} />
-            &nbsp;Background sync
+          <h2 style={{ marginTop: 0 }}>Reminders</h2>
+          <label>Default notification lead time (minutes)
+            <input className="input" type="number" min={0} max={1440}
+              value={config.notificationLeadTimeMinutesDefault}
+              onChange={(e) => set("notificationLeadTimeMinutesDefault", Number(e.target.value))} />
           </label>
-          <button className="btn btn--ghost btn--full" style={{ marginTop: 12 }}
-            onClick={() => sync.runOnce()}>Sync now</button>
+          <label className="row" style={{ marginTop: 6 }}>
+            <input type="checkbox" checked={config.vibrateOnReminder}
+              onChange={(e) => set("vibrateOnReminder", e.target.checked)} />
+            &nbsp;Vibrate on reminder
+          </label>
+          <label className="row" style={{ marginTop: 6 }}>
+            <input type="checkbox" checked={config.soundOnReminder}
+              onChange={(e) => set("soundOnReminder", e.target.checked)} />
+            &nbsp;Sound on reminder
+          </label>
+        </div>
+
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>Locations</h2>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            {config.globalLocations.map((loc) => (
+              <span key={loc} className="chip">
+                {loc}&nbsp;
+                <button
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1 }}
+                  onClick={() => removeLocation(loc)}
+                  aria-label={`Remove ${loc}`}
+                >×</button>
+              </span>
+            ))}
+            {config.globalLocations.length === 0 && (
+              <span className="chip chip--muted">None</span>
+            )}
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <input className="input" style={{ flex: 1 }} placeholder="Add location…"
+              value={newLocation}
+              onChange={(e) => setNewLocation(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addLocation(); }} />
+            <button className="btn" onClick={addLocation}>Add</button>
+          </div>
         </div>
 
         <div className="card">
           <h2 style={{ marginTop: 0 }}>About</h2>
-          <p>Kids Rides & Classes PWA · v0.1.0</p>
-          {canInstall ? (
-            <button className="btn btn--full" style={{ marginTop: 8 }} onClick={install}>
-              Install app
-            </button>
-          ) : (
-            <p className="chip chip--muted" style={{ textAlign: "center" }}>
-              Already installed or not supported on this browser.
-            </p>
+          <p>Kids Rides for Crazy Parents PWA · v0.1.0</p>
+          {!isStandalone && (
+            canInstall
+              ? <button className="btn btn--full" style={{ marginTop: 8 }} onClick={install}>Install app</button>
+              : isIOSChrome
+                ? <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 0 }}>
+                    Chrome on iPhone can't install apps. Open this page in <strong>Safari</strong>, then tap
+                    the Share button and choose <strong>Add to Home Screen</strong>.
+                  </p>
+                : isIOSSafari
+                  ? <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 0 }}>
+                      Tap the <strong>Share</strong> button at the bottom of Safari, then choose <strong>Add to Home Screen</strong>.
+                    </p>
+                  : <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 0 }}>
+                      Open the browser menu and choose <strong>Add to Home Screen</strong>.
+                    </p>
           )}
         </div>
 
-        <button className="btn btn--danger btn--full" onClick={signOut} style={{ marginTop: 16 }}>
-          Sign out (wipes local data)
+        {!fileHandle && (
+          <button className="btn btn--full" onClick={downloadFile} style={{ marginTop: 16 }}>
+            Download idrive.xlsx
+          </button>
+        )}
+
+        <button className="btn btn--danger btn--full" onClick={closeFile} style={{ marginTop: 8 }}>
+          Close file (return to start)
         </button>
       </main>
     </>

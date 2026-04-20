@@ -3,7 +3,6 @@ import type {
   ChildColor,
   DayOfWeek,
   EventStatus,
-  EventType,
   NotificationCategory,
   RecurrenceFrequency,
   RideDirection,
@@ -14,12 +13,27 @@ import {
   AssignmentStatus as AS,
   ChildColor as CC,
   EventStatus as ES,
-  EventType as ET,
   RideDirection as RD,
   VisibilityScope as VS,
 } from "./enums";
 
 export type Millis = number;
+
+export interface Activity {
+  name: string;
+  days: string[];    // array of DayOfWeek values; empty = every day
+  place: string;
+  startTime: string; // "HH:MM" or ""
+  endTime: string;   // "HH:MM" or ""
+  repeating: boolean; // default true; false = "one time only" (generates one event)
+  needsRide: boolean;
+  rideDirection: RideDirection;
+  notes: string;     // template text copied to event.description on generation
+}
+
+export function newActivity(partial: Partial<Activity> & Pick<Activity, "name">): Activity {
+  return { days: [], place: "", startTime: "", endTime: "", repeating: true, needsRide: false, rideDirection: RD.BOTH, notes: "", ...partial };
+}
 
 export interface Parent {
   parentId: string;
@@ -39,6 +53,7 @@ export interface Child {
   colorTag: ChildColor;
   notes: string;
   isArchived: boolean;
+  activities: Activity[];
   createdAt: Millis;
   updatedAt: Millis;
 }
@@ -55,7 +70,7 @@ export interface Event {
   groupId?: string | null;
   childId: string;
   title: string;
-  eventType: EventType;
+  eventType: string;
   description: string;
   locationName: string;
   locationAddress: string;
@@ -76,6 +91,7 @@ export interface RideAssignment {
   assignmentId: string;
   eventId: string;
   driverParentId: string;
+  driverName: string;
   rideLeg: RideLeg;
   assignmentStatus: AssignmentStatus;
   notes: string;
@@ -110,6 +126,7 @@ export function newChild(partial: Partial<Child> & Pick<Child, "childId" | "pare
     colorTag: CC.BLUE,
     notes: "",
     isArchived: false,
+    activities: [],
     createdAt: 0,
     updatedAt: 0,
     ...partial,
@@ -134,7 +151,7 @@ export function newEvent(
 ): Event {
   return {
     groupId: null,
-    eventType: ET.CLASS,
+    eventType: "",
     description: "",
     locationName: "",
     locationAddress: "",
@@ -158,6 +175,7 @@ export function newAssignment(
 ): RideAssignment {
   return {
     assignmentStatus: AS.UNASSIGNED,
+    driverName: "",
     notes: "",
     claimedAt: null,
     completedAt: null,

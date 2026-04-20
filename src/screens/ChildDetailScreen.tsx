@@ -1,81 +1,77 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Header } from "@/components/Header";
-import { ChildDot } from "@/components/ChildDot";
-import { childrenRepo, eventsRepo } from "@/storage/repository";
+import { useApp } from "@/state/AppContext";
 import { ChildColor } from "@/domain/enums";
-import type { Child, Event } from "@/domain/models";
-import { fmtDateTime } from "@/lib/format";
+import type { Child } from "@/domain/models";
+import { getEveryDayLabel } from "@/lib/i18n";
 
 export function ChildDetailScreen() {
   const { childId = "" } = useParams();
-  const nav = useNavigate();
-  const [child, setChild] = useState<Child | null>(null);
-  const [events, setEvents] = useState<Event[]>([]);
+  const navigate = useNavigate();
+  const { children, upsertChild, config } = useApp();
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const c = await childrenRepo.byId(childId);
-      const e = await eventsRepo.byChild(childId);
-      if (!cancelled) {
-        setChild(c ?? null);
-        setEvents(e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [childId]);
+  const stored = children.find((c) => c.childId === childId) ?? null;
+  const [draft, setDraft] = useState<Child | null>(stored);
 
-  if (!child) return <><Header title="Child" back /><main className="app-main"><div className="card empty">Not found.</div></main></>;
+  if (!stored) return (
+    <><Header title="Child" back /><main className="app-main"><div className="card empty">Not found.</div></main></>
+  );
 
   const save = async (patch: Partial<Child>) => {
-    const updated = await childrenRepo.upsert({ ...child, ...patch });
-    setChild(updated);
+    const updated = { ...stored, ...patch };
+    setDraft(updated);
+    await upsertChild(updated);
   };
 
-  const archive = async () => {
-    await childrenRepo.archive(child.childId);
-    nav("/children");
-  };
+  const current = draft ?? stored;
 
   return (
     <>
-      <Header title={child.name} back />
+      <Header title={current.name} back />
       <main className="app-main">
         <div className="card">
           <label>Name
-            <input className="input" value={child.name} onChange={(e) => setChild({ ...child, name: e.target.value })}
+            <input className="input" value={current.name}
+              onChange={(e) => setDraft({ ...current, name: e.target.value })}
               onBlur={(e) => save({ name: e.target.value })} />
           </label>
           <label>Color
-            <select className="select" value={child.colorTag}
+            <select className="select" value={current.colorTag}
               onChange={(e) => save({ colorTag: e.target.value as ChildColor })}>
               {Object.values(ChildColor).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </label>
           <label>Notes
-            <textarea className="textarea" value={child.notes ?? ""}
-              onChange={(e) => setChild({ ...child, notes: e.target.value })}
+            <textarea className="textarea" value={current.notes ?? ""}
+              onChange={(e) => setDraft({ ...current, notes: e.target.value })}
               onBlur={(e) => save({ notes: e.target.value })} />
           </label>
-          <button className="btn btn--danger btn--full" onClick={archive} style={{ marginTop: 12 }}>
-            Archive child
-          </button>
         </div>
 
-        <h2 style={{ margin: "20px 4px 8px", fontSize: 13, textTransform: "uppercase", color: "var(--muted)" }}>
-          Events
-        </h2>
-        {events.length === 0 && <div className="card empty">No events for {child.name}.</div>}
-        {events.map((e) => (
-          <div className="card" key={e.eventId}>
-            <div className="row">
-              <ChildDot color={child.colorTag} />
-              <strong>{e.title}</strong>
-            </div>
-            <p>{fmtDateTime(e.startDateTime)}</p>
+        <div className="card">
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+            <h2 style={{ margin: 0 }}>Activities</h2>
+            <button className="btn" onClick={() => navigate(`/children/${childId}/activities/new`)}>Add</button>
           </div>
-        ))}
+          {current.activities.length === 0 && (
+            <span className="chip chip--muted">No activities</span>
+          )}
+          {current.activities.map((activity, idx) => (
+            <div key={idx} className="row"
+              style={{ justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--border)", cursor: "pointer" }}
+              onClick={() => navigate(`/children/${childId}/activities/${idx}`)}>
+              <div className="row" style={{ gap: 8 }}>
+                <span>{activity.name}</span>
+                {activity.days.length === 0
+                  ? <span className="chip">{getEveryDayLabel(config.language)}</span>
+                  : activity.days.map((d) => <span className="chip" key={d}>{d}</span>)}
+              </div>
+              <span style={{ fontSize: 18, color: "var(--muted)", paddingRight: 4 }}>›</span>
+            </div>
+          ))}
+        </div>
+
       </main>
     </>
   );

@@ -1,7 +1,6 @@
-# CLAUDE.md — Context pack for future Claude Code sessions
+# CLAUDE.md — Context pack for Claude Code sessions
 
-Read this first whenever you start a session in `/mnt/idrive`. It is the
-shortest path from zero context to productive work.
+Read this first. It is the shortest path from zero context to productive work.
 
 ---
 
@@ -10,36 +9,32 @@ shortest path from zero context to productive work.
 **Kids Rides & Classes Manager** — a Progressive Web App (PWA) for parent
 groups to coordinate children's classes and shared rides.
 
-- Stack: **React 18 + TypeScript + Vite + Vitest + Dexie (IndexedDB) +
+- Stack: **React 18 + TypeScript + Vite + Vitest + SheetJS (xlsx) +
   Workbox service worker + React Router**
 - Installable on Android (Chrome install prompt) and iOS (Add to Home Screen)
-- Offline-capable via service worker precache + IndexedDB
-- Adapters (`DriveAdapter` / `SheetsAdapter`) abstract over Google Drive and
-  Sheets; debug builds use in-memory mocks
-- Mocks seed two demo events (Piano Lesson, Soccer Practice) per sheet on
-  first read — exercised by `MockSheetsAdapter` tests
+- Offline-capable via Workbox service worker precache
+- **All data lives in a single local `.xlsx` file** (typically `idrive.xlsx`)
+  opened via the browser File System Access API
+- No backend, no cloud sync — the user owns the file
 
-The original Android-native version was retired on 2026-04-18 and replaced
-by this PWA per `plan2.md`. See git history if you need the Kotlin source.
+The original Android-native version (Kotlin) was retired 2026-04-18. A
+Google Drive/Sheets integration was drafted and then replaced by the XLSX
+approach 2026-04-19.
 
 ---
 
 ## 2. Repo layout
 
 ```
-/mnt/idrive/
+/
 ├── README.md                    ← user-facing entry point
 ├── CLAUDE.md                    ← THIS file
 ├── gettingStarted.md            ← developer workflow
-├── install.sh                   ← one-shot host setup (installs Node 20 + npm install)
+├── install.sh                   ← one-shot host setup (Node 20 + npm install)
 ├── plan1.md                     ← original product spec (authoritative for intent)
 ├── plan2.md                     ← PWA migration brief
 │
-├── package.json                 ← npm scripts + deps
-├── tsconfig.json                ← strict TS, @/* → src/*
-├── vite.config.ts               ← Vite + vite-plugin-pwa (manifest + Workbox)
-├── index.html                   ← entry HTML (PWA meta tags + apple-touch)
-├── .gitignore                   ← node_modules, dist, dev-dist, coverage, etc.
+├── package.json / tsconfig.json / vite.config.ts / index.html
 │
 ├── public/
 │   ├── favicon.svg
@@ -47,27 +42,56 @@ by this PWA per `plan2.md`. See git history if you need the Kotlin source.
 │
 ├── src/
 │   ├── main.tsx                 ← entry
-│   ├── App.tsx                  ← router + shell
-│   ├── styles.css               ← global styles (mobile-first, dark mode)
-│   ├── vite-env.d.ts
-│   ├── domain/                  ← enums, models, recurrence, rideStateMachine, conflictDetector, config
-│   ├── storage/                 ← db.ts (Dexie schema) + repository.ts (CRUD + sync queue)
-│   ├── remote/                  ← DriveAdapter / SheetsAdapter + mock/ implementations + privateDriveData
-│   ├── services/                ← SyncEngine
-│   ├── state/                   ← AppContext (parent, config, sync state)
-│   ├── components/              ← Header, TabBar, SyncBanner, ChildDot, RideStatusChip
-│   ├── screens/                 ← SignIn, Dashboard, Children, ChildDetail, Events, EventEditor,
-│   │                              RidesBoard, MyRides, Notifications, Settings
-│   ├── pwa/registerSW.ts        ← service worker registration
-│   └── lib/                     ← useLiveQuery, format
+│   ├── App.tsx                  ← router + Shell guard
+│   ├── styles.css               ← global styles (mobile-first, CSS vars, dark mode)
+│   ├── file-system-access.d.ts  ← TS declarations for showOpenFilePicker / showSaveFilePicker
+│   │
+│   ├── domain/
+│   │   ├── enums.ts             ← all enums as const objects + type unions
+│   │   ├── models.ts            ← interfaces + factory helpers (newChild, newEvent, …)
+│   │   ├── config.ts            ← AppLocalConfig interface + defaultAppLocalConfig
+│   │   ├── recurrence.ts        ← recurrence rule expander
+│   │   ├── rideStateMachine.ts  ← assignment state transitions
+│   │   └── conflictDetector.ts  ← schedule conflict detection
+│   │
+│   ├── storage/
+│   │   └── xlsxStorage.ts       ← ALL file I/O: open, create, read, write XLSX
+│   │                              also persists FileSystemFileHandle in IndexedDB
+│   │
+│   ├── state/
+│   │   └── AppContext.tsx        ← React context + all mutations (upsertChild, upsertEvent, …)
+│   │
+│   ├── components/
+│   │   ├── Header.tsx
+│   │   ├── TabBar.tsx
+│   │   ├── ChildDot.tsx
+│   │   └── RideStatusChip.tsx
+│   │
+│   ├── screens/
+│   │   ├── OpenFileScreen.tsx        ← open existing or create new file
+│   │   ├── DashboardScreen.tsx       ← upcoming events, my rides, open ride counts
+│   │   ├── ChildrenScreen.tsx        ← list + inline add
+│   │   ├── ChildDetailScreen.tsx     ← edit profile, activities list (clickable rows)
+│   │   ├── ActivityEditorScreen.tsx  ← add/edit activity → auto-generates events
+│   │   ├── EventsScreen.tsx          ← all events
+│   │   ├── EventEditorScreen.tsx     ← add/edit single event
+│   │   ├── RidesBoardScreen.tsx      ← claim/unclaim legs, child-colour filter
+│   │   ├── MyRidesScreen.tsx         ← my claimed rides
+│   │   ├── NotificationsScreen.tsx
+│   │   └── SettingsScreen.tsx        ← theme, language, reminders, locations, close file
+│   │
+│   ├── pwa/registerSW.ts        ← Workbox service worker registration
+│   └── lib/
+│       ├── format.ts            ← fmtDateTime, fmtDate
+│       ├── i18n.ts              ← day-of-week / "every day" labels
+│       └── useInstallPrompt.ts  ← PWA install prompt hook
 │
 └── tests/
-    ├── setup.ts                 ← fake-indexeddb + per-test DB reset
-    ├── domain/                  ← recurrence (7), rideStateMachine (14), conflictDetector (7)
-    ├── config/configParser (6)
-    ├── remote/                  ← privateDriveData (2), mockSheetsAdapter (6)
-    └── services/                ← syncEngine (2)
-                                    TOTAL: 44 cases
+    ├── setup.ts                 ← fake-indexeddb/auto (env compat, no Dexie in app)
+    └── domain/
+        ├── recurrence.test.ts        (7 cases)
+        ├── rideStateMachine.test.ts  (14 cases)
+        └── conflictDetector.test.ts  (7 cases)
 ```
 
 ---
@@ -75,131 +99,230 @@ by this PWA per `plan2.md`. See git history if you need the Kotlin source.
 ## 3. How to build, test, run
 
 ```bash
-# one-time
-./install.sh              # or: npm install
+./install.sh              # one-time: installs Node 20 + npm install
 
-# day-to-day
 npm run dev               # http://localhost:5173 — Vite HMR
-npm test                  # Vitest — 44 cases, ~2s
+npm test                  # Vitest — 28 cases, ~1s
 npm run typecheck         # tsc --noEmit
-npm run build             # dist/  (includes sw.js + manifest.webmanifest)
+npm run build             # dist/ (includes sw.js + manifest.webmanifest)
 npm run preview           # http://localhost:4173 — serve built dist/
 ```
 
-The dev server binds to LAN (`host: true`) so you can hit it from a phone
-on the same Wi-Fi. iOS needs HTTPS for service workers — use
-`vite preview --https` or a tunnel.
+**HTTPS required for LAN / phone access.** `localhost` works on HTTP;
+accessing from a phone on LAN requires HTTPS. Use `vite preview --https`
+or a tunnel.
 
 ---
 
-## 4. Conventions that matter
+## 4. XLSX file format
+
+| Tab name | Content |
+|---|---|
+| `Config` | Key-value config rows, then blank row, then `[Children]` header + one row per child. Child activities are stored as a JSON blob in column 6. |
+| `MMYY` (e.g. `0426`) | One tab per month. Contains `[Events]` section (header + rows), blank row, then `[Assignments]` section. |
+
+Tab names are produced by `monthTabName(timestamp)` in `xlsxStorage.ts`:
+`MM` = zero-padded month, `YY` = two-digit year (e.g. `"0426"` for April 2026).
+
+All reads/writes go through `src/storage/xlsxStorage.ts`. Nothing else
+touches SheetJS directly.
+
+---
+
+## 5. Core domain concepts
+
+### Activity
+A **template** attached to a child. It has no date — it describes a
+recurring schedule:
+- `name`, `place` — what and where
+- `days: string[]` — days of week as `DayOfWeek` values; empty = every day
+- `startTime`, `endTime` — `"HH:MM"` strings
+- `repeating: boolean` — `true` = recurring (all matching days); `false` = one-time (first matching day only)
+- `needsRide: boolean`, `rideDirection: RideDirection` — ride coordination
+
+**Activities are edited in `ActivityEditorScreen`** and stored as a JSON
+array on the `Child` record (in the Config tab). They are never shown in the
+Events screen.
+
+### Event
+A **concrete dated occurrence** derived from an activity or added manually.
+Stored in monthly tabs. Key fields: `eventId`, `childId`, `title`,
+`eventType`, `startDateTime`, `endDateTime`, `locationName`, `needsRide`,
+`rideDirection`, `status`.
+
+### Activity → Event generation
+When an activity is saved, `ActivityEditorScreen` calls `generateActivityEvents`:
+- Iterates from **today** to **end of current month**
+- Skips days not in `activity.days` (unless `days` is empty = every day)
+- Stops after first match if `!activity.repeating` (one-time)
+- Event IDs are **deterministic**: `act-{childId.slice(-6)}-{slugged-name}-{YYYY-MM-DD}`
+  so saving the same activity twice is idempotent (upsert deduplicates)
+- Events are bulk-written via `upsertEvents()` (single file write)
+
+When editing an existing activity, future events with `eventType === existing.name`
+are also updated in bulk before regenerating.
+
+### RideAssignment
+Links a `driverParentId` to an `eventId` + `rideLeg` (`TO` / `FROM`).
+Status flows: `UNASSIGNED → VOLUNTEERED → CONFIRMED → COMPLETED`.
+
+---
+
+## 6. Data flow
+
+```
+Open/create file
+  → showOpenFilePicker / showSaveFilePicker
+  → xlsxStorage: parse XLSX → AppData { config, children, events, assignments }
+  → AppContext: dataRef.current = data; setData(data)   ← MUST update both
+
+Any mutation (upsertChild, upsertEvent, upsertEvents, upsertAssignment, …)
+  → reads dataRef.current (always the latest data — see §8)
+  → builds next AppData
+  → save(): dataRef.current = next; setData(next); writeToHandle(handle, next)
+```
+
+No sync queue, no debounce. Every mutation writes the full file immediately.
+
+---
+
+## 7. Login / identity
+
+There is **no auth flow**. `AppContext` derives the `parent` object from
+`config.loginName` and `config.loginEmail`:
+
+```typescript
+const parent = loginName && loginEmail
+  ? { parentId: loginEmail, displayName: loginName, email: loginEmail }
+  : null;
+```
+
+`Shell` in `App.tsx` shows `<OpenFileScreen />` when `parent` is null.
+The `parent` object is set:
+- **On file create**: the user enters name + email in `OpenFileScreen` → stored in config
+- **On file open**: read from the `Config` tab
+
+If a file is opened that has no `loginName`/`loginEmail` (e.g. corrupted),
+the app stays on `OpenFileScreen`. The user must create a new file or
+manually edit the `.xlsx`.
+
+---
+
+## 8. The `dataRef` pattern — critical
+
+All upsert functions in `AppContext` read `dataRef.current`, NOT React state
+(`data`). This is intentional to prevent stale-closure bugs where sequential
+or batched mutations each overwrite the file using an outdated snapshot.
+
+```typescript
+// In AppContext.tsx
+const dataRef = useRef(data);
+dataRef.current = data;         // sync on every render — always current
+```
+
+Additionally, every call path that calls `setData(x)` directly (openFile,
+createFile, closeFile, tryReopenSavedFile) must also do `dataRef.current = x`
+**before** calling `setData`. This ensures the ref is current even before
+the first React re-render after opening a file.
+
+`save()` also updates the ref synchronously:
+```typescript
+const save = async (handle, next) => {
+  dataRef.current = next;
+  setData(next);
+  await writeToHandle(handle, next);
+};
+```
+
+**Never add a mutation that reads `data` (React state) directly** — it will
+be stale inside async functions. Always use `dataRef.current`.
+
+---
+
+## 9. Conventions
 
 - **TypeScript strict mode** — `noUnusedLocals`, `noUnusedParameters`,
   `noFallthroughCasesInSwitch` all on
 - **Immutability** — always spread (`{ ...obj, field: v }`), never mutate
-- **Many small files** — one screen per file under `src/screens/`, one
-  component per file under `src/components/`
-- **Enums as `const` objects + `type` union** (not TS `enum`) — avoids
-  runtime gotchas, serializes as plain strings
-- **`@` alias → `src/`** — use `@/domain/...` not `../../domain/...`
-- **Adapter boundary is sacred** — `DriveAdapter` / `SheetsAdapter` are the
-  only contracts to respect when porting to real Google APIs. Do not leak
-  Google SDK types into `domain/`
-- **Repositories return Promises or Dexie Observables** — mutations write
-  IndexedDB first, then `enqueue()` a sync op into `syncQueue`. The
-  `SyncEngine` drains the queue.
-- **LiveQuery for reactive UI** — `useLiveQuery(() => repo.observeAll(), [])`
-  keeps the view in sync with IndexedDB.
+- **Enums as `const` objects + `type` union** (not TS `enum`) — serialises
+  as plain strings, no runtime gotchas. See `src/domain/enums.ts`.
+- **`@` alias → `src/`** — always use `@/domain/…` not `../../domain/…`
+- **Never import SheetJS outside `xlsxStorage.ts`**
+- **No Dexie anywhere** — `xlsxStorage.ts` uses raw `indexedDB.open` only to
+  persist the `FileSystemFileHandle`. `tests/setup.ts` imports
+  `fake-indexeddb/auto` for environment compat only.
+- **One screen per file** under `src/screens/`; **one component per file**
+  under `src/components/`
+- **Bulk mutations** — when saving multiple events at once use `upsertEvents`
+  (not a `Promise.all` of individual `upsertEvent` calls, which races)
 
 ---
 
-## 5. State of implementation
+## 10. State of implementation
 
 ### ✅ Done
 - PWA scaffold: manifest, icons, Workbox service worker (auto-update,
   network-first for HTML, cache-first for images, stale-while-revalidate
   for JS/CSS)
-- IndexedDB via Dexie — 7 tables (parents, children, events, assignments,
-  groups, notifications, syncQueue)
-- Mock Drive + Sheets adapters behind the real adapter interfaces
-- Sync engine: pushes queued ops → Drive/Sheets, pulls group events/
-  assignments/notifications back into IndexedDB
-- 12 screens: SignIn, Dashboard, Children, ChildDetail, Events,
-  EventEditor, RidesBoard, MyRides, Notifications, Settings (+ internal
-  Header/TabBar/SyncBanner components)
-- Recurrence expander, ride-assignment state machine, conflict detector —
-  all ported from Kotlin with identical behaviour (43 original test cases +
-  2 new sync-engine integration tests = 44 green)
-- Local config (theme, language, landing screen, sync prefs) persisted in
-  `localStorage`
+- XLSX persistence via SheetJS + File System Access API
+- File handle persistence between sessions (raw IndexedDB)
+- 12 screens (including ActivityEditor)
+- Activity model: per-child, days/time/place/needsRide, recurring or one-time
+- Activity → Event auto-generation (today → end of month, deterministic IDs)
+- Rides Board: child-colour filter tabs + background tint when filtered
+- Dashboard: week and month open-ride-request counters
+- Recurrence expander, ride state machine, conflict detector (28 tests, all green)
+- Local config stored in Config tab (theme, language, landing screen, etc.)
 
-### 🚧 Partial
-- `SyncEngine` only runs on demand (Settings → *Sync now* or programmatic).
-  Background sync via Workbox's `BackgroundSyncPlugin` would be the next
-  step.
-- Conflict resolution surface exists in `conflictDetector.ts` but no
-  dedicated screen yet.
+### 🚧 Known gaps
+- File handle auto-reopen works on desktop Chrome; iOS Safari does not
+  support persistent `FileSystemFileHandle` storage
+- No conflict-resolution UI (detector exists in `conflictDetector.ts`)
+- `CommonActivityEditorScreen.tsx` still exists in the file system but has
+  no route — it is dead code and can be deleted
 
 ### ❌ Not started
-- Real Google OAuth + Drive/Sheets API calls (interfaces are in place)
+- Google Drive auto-upload of the XLSX file
 - Web Push notifications
 - Group join-by-code flow
 - Hebrew localisation
 
 ---
 
-## 6. Things that will bite you
+## 11. Things that will bite you
 
-- **Service workers need HTTPS** outside of `localhost`. `vite preview`
-  serves HTTP by default — use `--https` or a tunnel for iOS testing.
-- **Dexie singleton + tests** — `tests/setup.ts` imports
-  `fake-indexeddb/auto` and calls `__resetDb()` between tests. Don't
-  hand-close the db elsewhere or the next test will see `DatabaseClosedError`.
-- **`parseConfig` strips unknown keys** by design, so forward-compat JSON
-  from a future version is silently dropped-on-the-floor safe.
-- **Booleans are unreliable IndexedDB index keys** — we filter in memory
-  via `toArray().filter(...)` instead of `.where("isArchived").equals(...)`.
-- **Workbox precache list** — `vite.config.ts` globs `**/*.{js,css,html,svg,png,ico,webmanifest}`.
-  If you add binary asset types (e.g. `.woff2`) and want them offline,
-  extend `globPatterns`.
-- **Cache-busting** — hashed filenames in `dist/assets/*` are safe to cache
-  long-term; `sw.js` and `manifest.webmanifest` MUST NOT be. Nginx snippet
-  in `gettingStarted.md` §5B is correct; double-check other hosts.
-
----
-
-## 7. Quick sanity check
-
-Before starting real work:
-
-```bash
-npm test
-```
-
-Expected: **44 passed**, 0 failed, ~2 seconds.
-
-```bash
-npm run build
-```
-
-Expected: `✓ built in …s`, `dist/sw.js` + `dist/workbox-*.js` generated,
-no TypeScript errors.
-
-If either fails on a clean checkout, the environment drifted — investigate
-before piling on changes.
+- **File System Access API is HTTPS-only** outside `localhost`.
+- **`showOpenFilePicker` / `showSaveFilePicker` type declarations** live in
+  `src/file-system-access.d.ts`. Don't remove it — TypeScript's built-in DOM
+  lib doesn't include these yet.
+- **SheetJS `Uint8Array` + `Blob`** — SheetJS returns `Uint8Array` whose
+  `.buffer` is typed as `ArrayBufferLike`. Cast: `new Uint8Array(raw).buffer as ArrayBuffer`.
+- **Stale closure trap** — all mutations read `dataRef.current`, never `data`.
+  See §8. Breaking this causes silent data loss (later writes overwrite earlier
+  ones with stale state).
+- **Bulk vs single upsert** — use `upsertEvents(array)` for multi-event
+  writes. `Promise.all(array.map(upsertEvent))` races: each call reads the
+  same `dataRef.current` snapshot before any of them writes back.
+- **Activity IDs are deterministic** — `act-{childId.slice(-6)}-{slug}-{date}`.
+  Re-saving an activity does NOT duplicate events; it upserts them.
 
 ---
 
-## 8. Working with this repo — rules of thumb
+## 12. Quick sanity check
 
-1. **Edit `src/`, test with `tests/`.** Don't put test fixtures in `src/`.
-2. **Add a screen → register in `App.tsx` and maybe `TabBar.tsx`.** Routes
-   that aren't top-level (e.g. `/events/:id`) shouldn't appear in the tab
-   bar.
-3. **Touching storage → bump the Dexie version** in `src/storage/db.ts`
-   and add a migration callback.
-4. **Touching the adapter interfaces → update BOTH mock impls + tests.**
-5. **Never import from `dexie` outside `src/storage/` or tests.** The rest
-   of the code should only see repositories.
-6. **Never commit `dist/`, `dev-dist/`, `node_modules/`, `coverage/`, or
-   anything in `.env*`.** `.gitignore` guards them.
+```bash
+npm test          # expect: 28 passed, 0 failed, ~1s
+npm run typecheck # expect: no errors
+npm run build     # expect: ✓ built, dist/sw.js generated
+```
+
+---
+
+## 13. Rules of thumb
+
+1. **Edit `src/`, test with `tests/`.** No fixtures in `src/`.
+2. **New screen → register in `App.tsx` + maybe `TabBar.tsx`.** Sub-routes
+   (e.g. `/events/:id`) should NOT appear in the tab bar.
+3. **All storage changes go in `xlsxStorage.ts`.** Update `buildWorkbook()`
+   and `parseWorkbook()` together.
+4. **Never commit `dist/`, `dev-dist/`, `node_modules/`, `*.xlsx` data files.**

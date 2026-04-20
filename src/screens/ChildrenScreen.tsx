@@ -2,22 +2,19 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Header } from "@/components/Header";
 import { ChildDot } from "@/components/ChildDot";
-import { useLiveQuery } from "@/lib/useLiveQuery";
-import { childrenRepo } from "@/storage/repository";
 import { useApp } from "@/state/AppContext";
 import { ChildColor } from "@/domain/enums";
 import { newChild } from "@/domain/models";
 
 export function ChildrenScreen() {
-  const { parent } = useApp();
-  const children = useLiveQuery(() => childrenRepo.observeAll(), []);
+  const { parent, children, upsertChild } = useApp();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [color, setColor] = useState<ChildColor>(ChildColor.BLUE);
 
   const save = async () => {
     if (!name.trim() || !parent) return;
-    await childrenRepo.upsert(newChild({
+    await upsertChild(newChild({
       childId: `c-${Math.random().toString(36).slice(2, 10)}`,
       parentOwnerId: parent.parentId,
       name: name.trim(),
@@ -44,16 +41,12 @@ export function ChildrenScreen() {
               <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 6 }}>
                 {Object.values(ChildColor).map((c) => (
                   <button
-                    key={c}
-                    type="button"
-                    onClick={() => setColor(c)}
+                    key={c} type="button" onClick={() => setColor(c)} aria-label={c} data-color={c}
                     style={{
                       border: color === c ? "3px solid var(--primary)" : "1px solid var(--border)",
                       width: 32, height: 32, borderRadius: "50%",
                       background: `var(--color-${c.toLowerCase()})`,
                     }}
-                    aria-label={c}
-                    data-color={c}
                   >
                     <ChildDot color={c} />
                   </button>

@@ -53,3 +53,8 @@ Thumbs.db
 
 # ─── Misc local ─────────────────────────────────────────────────────────────
 *.local
+
+# ─── User data files ────────────────────────────────────────────────────────
+# The app's data file (@idrive.xlsx) must never be committed — it contains
+# personal/group data and is managed by the user outside the repo.
+*.xlsx
