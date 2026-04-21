@@ -4,6 +4,7 @@ import type { Activity } from "@/domain/models";
 export interface AppLocalConfig {
   loginName: string;
   loginEmail: string;
+  activeParentId: string;
   themeMode: (typeof ThemeMode)[keyof typeof ThemeMode];
   language: (typeof AppLanguage)[keyof typeof AppLanguage];
   defaultLandingScreen: (typeof LandingScreen)[keyof typeof LandingScreen];
@@ -15,11 +16,13 @@ export interface AppLocalConfig {
   debugLoggingEnabled: boolean;
   globalActivities: Activity[];
   globalLocations: string[];
+  syncIntervalMinutes: number; // 0 = disabled
 }
 
 export const defaultAppLocalConfig: AppLocalConfig = {
   loginName: "",
   loginEmail: "",
+  activeParentId: "",
   themeMode: ThemeMode.SYSTEM,
   language: AppLanguage.SYSTEM,
   defaultLandingScreen: LandingScreen.DASHBOARD,
@@ -31,4 +34,5 @@ export const defaultAppLocalConfig: AppLocalConfig = {
   debugLoggingEnabled: false,
   globalActivities: [],
   globalLocations: [],
+  syncIntervalMinutes: 1,
 };

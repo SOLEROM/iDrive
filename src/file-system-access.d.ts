@@ -21,5 +21,10 @@ interface SaveFilePickerOptions {
   excludeAcceptAllOption?: boolean;
 }
 
+interface FileSystemDirectoryHandle {
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<FileSystemFileHandle>;
+}
+
 declare function showOpenFilePicker(options?: OpenFilePickerOptions): Promise<FileSystemFileHandle[]>;
 declare function showSaveFilePicker(options?: SaveFilePickerOptions): Promise<FileSystemFileHandle>;
+declare function showDirectoryPicker(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle>;

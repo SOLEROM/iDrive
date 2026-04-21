@@ -6,7 +6,7 @@ import { type AppLocalConfig } from "@/domain/config";
 import { useInstallPrompt } from "@/lib/useInstallPrompt";
 
 export function SettingsScreen() {
-  const { parent, config, fileHandle, setConfig, closeFile, downloadFile } = useApp();
+  const { parent, config, fileHandle, setConfig, closeFile, downloadFile, logOut } = useApp();
   const { canInstall, install } = useInstallPrompt();
   const isStandalone =
     window.matchMedia("(display-mode: standalone)").matches ||
@@ -37,8 +37,7 @@ export function SettingsScreen() {
       <main className="app-main">
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Profile</h2>
-          <p>{parent?.displayName}</p>
-          <p className="chip chip--muted">{parent?.email}</p>
+          <p style={{ margin: 0 }}>{parent?.displayName}</p>
         </div>
 
         <div className="card">
@@ -62,6 +61,17 @@ export function SettingsScreen() {
             </select>
           </label>
         </div>
+
+        {fileHandle && (
+          <div className="card">
+            <h2 style={{ marginTop: 0 }}>Sync</h2>
+            <label>Auto-sync interval (minutes, 0 = off)
+              <input className="input" type="number" min={0} max={60}
+                value={config.syncIntervalMinutes}
+                onChange={(e) => set("syncIntervalMinutes", Math.max(0, Math.min(60, Number(e.target.value))))} />
+            </label>
+          </div>
+        )}
 
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Reminders</h2>
@@ -135,8 +145,12 @@ export function SettingsScreen() {
           </button>
         )}
 
+        <button className="btn btn--full" onClick={logOut} style={{ marginTop: 8 }}>
+          Switch user
+        </button>
+
         <button className="btn btn--danger btn--full" onClick={closeFile} style={{ marginTop: 8 }}>
-          Close file (return to start)
+          Close file (erase all local data)
         </button>
       </main>
     </>

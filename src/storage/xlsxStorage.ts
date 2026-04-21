@@ -6,8 +6,14 @@ import {
   RideDirection, RideLeg, VisibilityScope,
 } from "@/domain/enums";
 
+export interface StoredParent {
+  parentId: string;
+  displayName: string;
+}
+
 export interface AppData {
   config: AppLocalConfig;
+  parents: StoredParent[];
   children: Child[];
   events: Event[];
   assignments: RideAssignment[];
@@ -34,6 +40,10 @@ function openHandleDb(): Promise<IDBDatabase> {
 
 export function isFSASupported(): boolean {
   return "showOpenFilePicker" in window;
+}
+
+export function isFSASaveSupported(): boolean {
+  return "showSaveFilePicker" in window;
 }
 
 export async function saveDataToIDB(data: AppData): Promise<void> {
@@ -130,13 +140,13 @@ export function monthTabName(timestamp: number): string {
 
 // ─── Config tab ──────────────────────────────────────────────────────────────
 const CONFIG_KEYS: (keyof AppLocalConfig)[] = [
-  "loginName", "loginEmail", "themeMode", "language", "defaultLandingScreen",
+  "loginName", "loginEmail", "activeParentId", "themeMode", "language", "defaultLandingScreen",
   "showCompletedRidesByDefault", "compactCardMode", "vibrateOnReminder",
   "soundOnReminder", "notificationLeadTimeMinutesDefault", "debugLoggingEnabled",
-  "globalActivities", "globalLocations",
+  "globalActivities", "globalLocations", "syncIntervalMinutes",
 ];
 
-function buildConfigSheet(config: AppLocalConfig, children: Child[]): XLSX.WorkSheet {
+function buildConfigSheet(config: AppLocalConfig, parents: StoredParent[], children: Child[]): XLSX.WorkSheet {
   const rows: (string | number | boolean | null)[][] = [
     ...CONFIG_KEYS.map((k) => {
       if (k === "globalActivities") {
@@ -149,23 +159,29 @@ function buildConfigSheet(config: AppLocalConfig, children: Child[]): XLSX.WorkS
     ["[Children]"],
     ["childId", "name", "colorTag", "notes", "isArchived", "eventTypes"],
     ...children.map((c) => [c.childId, c.name, c.colorTag, c.notes, String(c.isArchived), JSON.stringify(c.activities)]),
+    [],
+    ["[Parents]"],
+    ["parentId", "displayName"],
+    ...parents.map((p) => [p.parentId, p.displayName]),
   ];
   return XLSX.utils.aoa_to_sheet(rows);
 }
 
-function parseConfigSheet(ws: XLSX.WorkSheet): { config: AppLocalConfig; children: Child[] } {
+function parseConfigSheet(ws: XLSX.WorkSheet): { config: AppLocalConfig; parents: StoredParent[]; children: Child[] } {
   const rows = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: "" }) as string[][];
   const kv: Record<string, string> = {};
   const children: Child[] = [];
-  let inChildren = false;
-  let childHeaderSeen = false;
+  const parents: StoredParent[] = [];
+  let section: "config" | "children" | "parents" = "config";
+  let headerSeen = false;
 
   for (const row of rows) {
     const key = String(row[0] ?? "").trim();
-    if (!key) continue;
-    if (key === "[Children]") { inChildren = true; continue; }
-    if (inChildren && !childHeaderSeen) { childHeaderSeen = true; continue; }
-    if (inChildren) {
+    if (!key) { if (section !== "config") { section = "config"; headerSeen = false; } continue; }
+    if (key === "[Children]") { section = "children"; headerSeen = false; continue; }
+    if (key === "[Parents]") { section = "parents"; headerSeen = false; continue; }
+    if (section === "children") {
+      if (!headerSeen) { headerSeen = true; continue; }
       const rawCol5 = String(row[5] ?? "").trim();
       let activities: import("@/domain/models").Activity[] = [];
       try { activities = JSON.parse(rawCol5 || "[]"); } catch { activities = []; }
@@ -180,6 +196,11 @@ function parseConfigSheet(ws: XLSX.WorkSheet): { config: AppLocalConfig; childre
         createdAt: 0,
         updatedAt: 0,
       });
+    } else if (section === "parents") {
+      if (!headerSeen) { headerSeen = true; continue; }
+      if (String(row[0]).trim()) {
+        parents.push({ parentId: String(row[0]).trim(), displayName: String(row[1] ?? "").trim() });
+      }
     } else {
       kv[key] = String(row[1] ?? "");
     }
@@ -191,6 +212,7 @@ function parseConfigSheet(ws: XLSX.WorkSheet): { config: AppLocalConfig; childre
   const config: AppLocalConfig = {
     loginName: kv.loginName ?? d.loginName,
     loginEmail: kv.loginEmail ?? d.loginEmail,
+    activeParentId: kv.activeParentId ?? d.activeParentId,
     themeMode: (kv.themeMode as AppLocalConfig["themeMode"]) || d.themeMode,
     language: (kv.language as AppLocalConfig["language"]) || d.language,
     defaultLandingScreen: (kv.defaultLandingScreen as AppLocalConfig["defaultLandingScreen"]) || d.defaultLandingScreen,
@@ -202,8 +224,17 @@ function parseConfigSheet(ws: XLSX.WorkSheet): { config: AppLocalConfig; childre
     debugLoggingEnabled: kv.debugLoggingEnabled === "true",
     globalActivities,
     globalLocations: (() => { const raw = (kv.globalLocations ?? "").trim(); return raw ? raw.split("|").map((s) => s.trim()).filter(Boolean) : []; })(),
+    syncIntervalMinutes: kv.syncIntervalMinutes !== undefined ? parseInt(kv.syncIntervalMinutes) || 0 : d.syncIntervalMinutes,
   };
-  return { config, children };
+
+  // Migrate old single-user files: if no parents section but loginName is set, create a virtual parent
+  if (parents.length === 0 && config.loginName) {
+    const migratedId = config.loginEmail || `p-${config.loginName.toLowerCase().replace(/\s+/g, "-")}`;
+    parents.push({ parentId: migratedId, displayName: config.loginName });
+    config.activeParentId = migratedId;
+  }
+
+  return { config, parents, children };
 }
 
 // ─── Monthly tab ─────────────────────────────────────────────────────────────
@@ -291,7 +322,7 @@ function parseMonthSheet(ws: XLSX.WorkSheet): { events: Event[]; assignments: Ri
 // ─── Workbook build / parse ──────────────────────────────────────────────────
 function buildWorkbook(data: AppData): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildConfigSheet(data.config, data.children), "Config");
+  XLSX.utils.book_append_sheet(wb, buildConfigSheet(data.config, data.parents, data.children), "Config");
 
   // Group by month tab
   const byTab = new Map<string, { events: Event[]; assignments: RideAssignment[] }>();
@@ -322,9 +353,9 @@ function buildWorkbook(data: AppData): XLSX.WorkBook {
 
 function parseWorkbook(wb: XLSX.WorkBook): AppData {
   const configWs = wb.Sheets["Config"];
-  const { config, children } = configWs
+  const { config, parents, children } = configWs
     ? parseConfigSheet(configWs)
-    : { config: defaultAppLocalConfig, children: [] };
+    : { config: defaultAppLocalConfig, parents: [], children: [] };
 
   const events: Event[] = [];
   const assignments: RideAssignment[] = [];
@@ -334,11 +365,11 @@ function parseWorkbook(wb: XLSX.WorkBook): AppData {
     events.push(...es);
     assignments.push(...as);
   }
-  return { config, children, events, assignments };
+  return { config, parents, children, events, assignments };
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
-async function readHandle(handle: FileSystemFileHandle): Promise<AppData> {
+export async function readFromHandle(handle: FileSystemFileHandle): Promise<AppData> {
   const file = await handle.getFile();
   const buf = await file.arrayBuffer();
   return parseWorkbook(XLSX.read(buf, { type: "array" }));
@@ -358,17 +389,16 @@ export async function openExistingFile(): Promise<{ handle: FileSystemFileHandle
     types: [{ description: "iDrive file", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
     multiple: false,
   });
-  const data = await readHandle(handle);
+  const data = await readFromHandle(handle);
   await persistHandle(handle);
   return { handle, data };
 }
 
-export async function createNewFile(config: AppLocalConfig): Promise<{ handle: FileSystemFileHandle; data: AppData }> {
+export async function createNewFile(data: AppData): Promise<{ handle: FileSystemFileHandle; data: AppData }> {
   const handle = await showSaveFilePicker({
     suggestedName: "idrive.xlsx",
     types: [{ description: "iDrive file", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
   });
-  const data: AppData = { config, children: [], events: [], assignments: [] };
   await writeToHandle(handle, data);
   await persistHandle(handle);
   return { handle, data };
@@ -380,7 +410,7 @@ export async function tryReopenSavedFile(): Promise<{ handle: FileSystemFileHand
   try {
     const perm = await handle.queryPermission({ mode: "readwrite" });
     if (perm !== "granted") return null;
-    const data = await readHandle(handle);
+    const data = await readFromHandle(handle);
     return { handle, data };
   } catch {
     return null;

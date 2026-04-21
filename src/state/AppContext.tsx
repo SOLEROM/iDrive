@@ -1,34 +1,43 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { defaultAppLocalConfig, type AppLocalConfig } from "@/domain/config";
 import type { Child, Event, RideAssignment } from "@/domain/models";
 import {
-  openExistingFile, createNewFile, writeToHandle,
+  openExistingFile, createNewFile, writeToHandle, persistHandle, readFromHandle,
   tryReopenSavedFile, clearSavedHandle, type AppData,
   isFSASupported, openFileFromBuffer, saveDataToIDB, loadDataFromIDB, clearDataFromIDB, buildWorkbookBlob,
+  type StoredParent,
 } from "@/storage/xlsxStorage";
 
 export interface AppParent {
   parentId: string;
   displayName: string;
-  email: string;
 }
 
 interface AppContextValue {
   isLoading: boolean;
+  fileLoaded: boolean;
   fileError: string | null;
   fileHandle: FileSystemFileHandle | null;
+  isSyncing: boolean;
+  lastSyncAt: number | null;
 
   parent: AppParent | null;
+  parents: AppParent[];
   config: AppLocalConfig;
   children: Child[];
   events: Event[];
   assignments: RideAssignment[];
 
+  sync(): Promise<void>;
   openFile(): Promise<void>;
   openFileFromBuffer(buf: ArrayBuffer): Promise<void>;
-  createFile(cfg: AppLocalConfig): Promise<void>;
+  createFile(): Promise<void>;
   closeFile(): Promise<void>;
   downloadFile(): void;
+
+  addParentAndSwitch(name: string): Promise<void>;
+  switchParent(parentId: string): Promise<void>;
+  logOut(): Promise<void>;
 
   setConfig(next: Partial<AppLocalConfig>): Promise<void>;
   upsertChild(child: Child): Promise<void>;
@@ -40,20 +49,55 @@ interface AppContextValue {
 
 const Ctx = createContext<AppContextValue | null>(null);
 
+function makeEmptyData(): AppData {
+  return { config: defaultAppLocalConfig, parents: [], children: [], events: [], assignments: [] };
+}
+
+function mergeData(local: AppData, remote: AppData): AppData {
+  const parentMap = new Map<string, StoredParent>();
+  for (const p of [...remote.parents, ...local.parents]) parentMap.set(p.parentId, p);
+
+  const childMap = new Map<string, Child>();
+  for (const c of [...remote.children, ...local.children]) {
+    const ex = childMap.get(c.childId);
+    if (!ex || c.updatedAt > ex.updatedAt) childMap.set(c.childId, c);
+  }
+
+  const eventMap = new Map<string, Event>();
+  for (const e of [...remote.events, ...local.events]) {
+    const ex = eventMap.get(e.eventId);
+    if (!ex || e.updatedAt > ex.updatedAt) eventMap.set(e.eventId, e);
+  }
+
+  const assignMap = new Map<string, RideAssignment>();
+  for (const a of [...remote.assignments, ...local.assignments]) {
+    const ex = assignMap.get(a.assignmentId);
+    if (!ex || a.updatedAt > ex.updatedAt) assignMap.set(a.assignmentId, a);
+  }
+
+  return {
+    config: local.config, // local config wins (device-specific settings)
+    parents: [...parentMap.values()],
+    children: [...childMap.values()],
+    events: [...eventMap.values()],
+    assignments: [...assignMap.values()],
+  };
+}
+
 export function AppProvider({ children: reactChildren }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
+  const [fileLoaded, setFileLoaded] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
-  const [data, setData] = useState<AppData>({
-    config: defaultAppLocalConfig,
-    children: [],
-    events: [],
-    assignments: [],
-  });
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const [data, setData] = useState<AppData>(makeEmptyData());
   const dataRef = useRef(data);
-  dataRef.current = data; // keep ref current on every render
+  dataRef.current = data;
+  const fileHandleRef = useRef(fileHandle);
+  fileHandleRef.current = fileHandle;
+  const isSyncingRef = useRef(false);
 
-  // Try to silently reopen the last-used file on load.
   useEffect(() => {
     (async () => {
       try {
@@ -63,13 +107,14 @@ export function AppProvider({ children: reactChildren }: { children: React.React
             dataRef.current = result.data;
             setFileHandle(result.handle);
             setData(result.data);
+            setFileLoaded(true);
           }
         } else {
-          // iOS fallback: load from IndexedDB bytes
           const saved = await loadDataFromIDB();
           if (saved) {
             dataRef.current = saved;
             setData(saved);
+            setFileLoaded(true);
           }
         }
       } catch { /* no saved file — stay on open screen */ }
@@ -87,6 +132,34 @@ export function AppProvider({ children: reactChildren }: { children: React.React
     }
   };
 
+  // Stable sync function — reads from refs to avoid stale closures
+  const sync = useCallback(async () => {
+    const handle = fileHandleRef.current;
+    if (!handle || isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    setIsSyncing(true);
+    try {
+      const remote = await readFromHandle(handle);
+      const merged = mergeData(dataRef.current, remote);
+      await writeToHandle(handle, merged);
+      dataRef.current = merged;
+      setData(merged);
+      setLastSyncAt(Date.now());
+    } catch { /* sync errors are silent — file may be locked by another process */ }
+    finally {
+      isSyncingRef.current = false;
+      setIsSyncing(false);
+    }
+  }, []);
+
+  // Auto-sync timer
+  useEffect(() => {
+    const minutes = data.config.syncIntervalMinutes;
+    if (!fileHandle || !minutes) return;
+    const id = setInterval(sync, minutes * 60_000);
+    return () => clearInterval(id);
+  }, [fileHandle, data.config.syncIntervalMinutes, sync]);
+
   const openFile = async () => {
     setFileError(null);
     try {
@@ -94,6 +167,7 @@ export function AppProvider({ children: reactChildren }: { children: React.React
       dataRef.current = result.data;
       setFileHandle(result.handle);
       setData(result.data);
+      setFileLoaded(true);
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") {
         setFileError("Could not open file. Is it a valid idrive.xlsx?");
@@ -104,44 +178,70 @@ export function AppProvider({ children: reactChildren }: { children: React.React
   const openFileFromBufferFn = async (buf: ArrayBuffer) => {
     setFileError(null);
     try {
-      const data = await openFileFromBuffer(buf);
-      await saveDataToIDB(data);
-      dataRef.current = data;
+      const loaded = await openFileFromBuffer(buf);
+      await saveDataToIDB(loaded);
+      dataRef.current = loaded;
       setFileHandle(null);
-      setData(data);
+      setData(loaded);
+      setFileLoaded(true);
     } catch {
       setFileError("Could not open file. Is it a valid idrive.xlsx?");
     }
   };
 
-  const createFile = async (cfg: AppLocalConfig) => {
+  const createFile = async () => {
     setFileError(null);
-    try {
-      if (isFSASupported()) {
-        const result = await createNewFile(cfg);
+    const emptyData: AppData = { config: defaultAppLocalConfig, parents: [], children: [], events: [], assignments: [] };
+
+    if ("showSaveFilePicker" in window) {
+      try {
+        const result = await createNewFile(emptyData);
         dataRef.current = result.data;
         setFileHandle(result.handle);
         setData(result.data);
-      } else {
-        const data: AppData = { config: cfg, children: [], events: [], assignments: [] };
-        await saveDataToIDB(data);
-        dataRef.current = data;
-        setData(data);
+        setFileLoaded(true);
+      } catch (e) {
+        if ((e as DOMException).name !== "AbortError") setFileError("Could not create file.");
       }
-    } catch (e) {
-      if ((e as DOMException).name !== "AbortError") {
-        setFileError("Could not create file.");
+      return;
+    }
+
+    if ("showDirectoryPicker" in window) {
+      try {
+        const dir = await showDirectoryPicker({ mode: "readwrite" });
+        const handle = await dir.getFileHandle("idrive.xlsx", { create: true });
+        await writeToHandle(handle, emptyData);
+        await persistHandle(handle);
+        dataRef.current = emptyData;
+        setFileHandle(handle);
+        setData(emptyData);
+        setFileLoaded(true);
+      } catch (e) {
+        if ((e as DOMException).name !== "AbortError") setFileError("Could not create file.");
       }
+      return;
+    }
+
+    // Android / iOS — no file picker available, store in IDB
+    try {
+      await saveDataToIDB(emptyData);
+      dataRef.current = emptyData;
+      setData(emptyData);
+      setFileLoaded(true);
+    } catch {
+      setFileError("Could not create file.");
     }
   };
 
   const closeFile = async () => {
     await clearSavedHandle();
     await clearDataFromIDB();
-    const empty = { config: defaultAppLocalConfig, children: [], events: [], assignments: [] };
+    const empty = makeEmptyData();
     dataRef.current = empty;
     setFileHandle(null);
     setData(empty);
+    setFileLoaded(false);
+    setLastSyncAt(null);
   };
 
   const downloadFile = () => {
@@ -152,6 +252,29 @@ export function AppProvider({ children: reactChildren }: { children: React.React
     a.download = "idrive.xlsx";
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const addParentAndSwitch = async (name: string) => {
+    if (!fileHandle && isFSASupported()) return;
+    const parentId = `p-${Math.random().toString(36).slice(2, 10)}`;
+    const d = dataRef.current;
+    await save(fileHandle, {
+      ...d,
+      parents: [...d.parents, { parentId, displayName: name.trim() }],
+      config: { ...d.config, activeParentId: parentId },
+    });
+  };
+
+  const switchParent = async (parentId: string) => {
+    if (!fileHandle && isFSASupported()) return;
+    const d = dataRef.current;
+    await save(fileHandle, { ...d, config: { ...d.config, activeParentId: parentId } });
+  };
+
+  const logOut = async () => {
+    if (!fileHandle && isFSASupported()) return;
+    const d = dataRef.current;
+    await save(fileHandle, { ...d, config: { ...d.config, activeParentId: "" } });
   };
 
   const setConfig = async (next: Partial<AppLocalConfig>) => {
@@ -206,19 +329,25 @@ export function AppProvider({ children: reactChildren }: { children: React.React
     });
   };
 
-  const parent: AppParent | null =
-    data.config.loginName && data.config.loginEmail
-      ? { parentId: data.config.loginEmail, displayName: data.config.loginName, email: data.config.loginEmail }
-      : null;
+  const activeParent: AppParent | null = (() => {
+    const { activeParentId, loginName, loginEmail } = data.config;
+    const fromList = data.parents.find((p) => p.parentId === activeParentId);
+    if (fromList) return fromList;
+    if (loginName) return { parentId: loginEmail || loginName, displayName: loginName };
+    return null;
+  })();
 
   return (
     <Ctx.Provider value={{
-      isLoading, fileError, fileHandle,
-      parent, config: data.config,
+      isLoading, fileLoaded, fileError, fileHandle, isSyncing, lastSyncAt,
+      parent: activeParent,
+      parents: data.parents,
+      config: data.config,
       children: data.children.filter((c) => !c.isArchived),
       events: data.events,
       assignments: data.assignments,
-      openFile, openFileFromBuffer: openFileFromBufferFn, createFile, closeFile, downloadFile,
+      sync, openFile, openFileFromBuffer: openFileFromBufferFn, createFile, closeFile, downloadFile,
+      addParentAndSwitch, switchParent, logOut,
       setConfig, upsertChild, upsertEvent, upsertEvents, deleteEvent, upsertAssignment,
     }}>
       {reactChildren}
