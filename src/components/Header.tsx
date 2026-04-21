@@ -1,5 +1,7 @@
+import { useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "@/state/AppContext";
+import { isFSASupported } from "@/storage/xlsxStorage";
 
 interface Props {
   title: string;
@@ -9,13 +11,32 @@ interface Props {
 
 export function Header({ title, back, action }: Props) {
   const nav = useNavigate();
-  const { fileHandle, isSyncing, lastSyncAt, sync } = useApp();
+  const { fileLoaded, isSyncing, syncNeeded, lastSyncAt, sync, syncFromBuffer } = useApp();
+  const syncFileRef = useRef<HTMLInputElement>(null);
+  const hasFSA = isFSASupported();
+
+  const handleSyncClick = () => {
+    if (hasFSA) {
+      sync(); // FSA: use file handle (or requestPermission if expired)
+    } else {
+      syncFileRef.current?.click(); // iOS: open file picker
+    }
+  };
+
+  const handleSyncFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    await syncFromBuffer(await file.arrayBuffer());
+  };
 
   const syncLabel = isSyncing
     ? "Syncing…"
-    : lastSyncAt
-      ? `Synced ${formatAgo(lastSyncAt)}`
-      : "Sync";
+    : syncNeeded
+      ? "Sync needed"
+      : lastSyncAt
+        ? `Synced ${formatAgo(lastSyncAt)}`
+        : "Sync";
 
   return (
     <header className="app-header">
@@ -33,16 +54,31 @@ export function Header({ title, back, action }: Props) {
         <h1>{title}</h1>
       </div>
       <div className="row" style={{ gap: 8 }}>
-        {fileHandle && (
-          <button
-            className="btn btn--ghost"
-            style={{ padding: "4px 10px", minHeight: "auto", fontSize: 13, opacity: isSyncing ? 0.6 : 1 }}
-            onClick={sync}
-            disabled={isSyncing}
-            title={lastSyncAt ? `Last synced: ${new Date(lastSyncAt).toLocaleTimeString()}` : "Sync with file"}
-          >
-            ⟳ {syncLabel}
-          </button>
+        {fileLoaded && (
+          <>
+            <button
+              className="btn btn--ghost"
+              style={{
+                padding: "4px 10px", minHeight: "auto", fontSize: 13,
+                opacity: isSyncing ? 0.6 : 1,
+                color: syncNeeded ? "var(--warning, #f59e0b)" : undefined,
+              }}
+              onClick={handleSyncClick}
+              disabled={isSyncing}
+              title={lastSyncAt ? `Last synced: ${new Date(lastSyncAt).toLocaleTimeString()}` : "Sync with file"}
+            >
+              ⟳ {syncLabel}
+            </button>
+            {!hasFSA && (
+              <input
+                ref={syncFileRef}
+                type="file"
+                accept=".xlsx"
+                style={{ display: "none" }}
+                onChange={handleSyncFile}
+              />
+            )}
+          </>
         )}
         {action && (
           <button

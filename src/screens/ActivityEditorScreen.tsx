@@ -21,7 +21,7 @@ function directionFromChecks(to: boolean, from: boolean): RideDirection {
 export function ActivityEditorScreen() {
   const { childId = "", activityIndex = "new" } = useParams();
   const navigate = useNavigate();
-  const { parent, children, events, upsertChild, upsertEvents, config } = useApp();
+  const { parent, children, events, upsertChild, upsertEvents, deleteEvents, config } = useApp();
 
   const child = children.find((c) => c.childId === childId) ?? null;
   const isNew = activityIndex === "new";
@@ -126,6 +126,14 @@ export function ActivityEditorScreen() {
     if (toUpsert.length > 0) await upsertEvents(toUpsert);
   };
 
+  const futurEventIdsForActivity = (activityName: string): string[] => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return events
+      .filter((e) => e.childId === childId && e.eventType === activityName && e.startDateTime >= today.getTime())
+      .map((e) => e.eventId);
+  };
+
   const handleSave = async () => {
     const days = allDays.filter((d) => d in dayTimes);
     const rideDirection = directionFromChecks(rideTo, rideFrom);
@@ -138,39 +146,24 @@ export function ActivityEditorScreen() {
     const activities = isNew
       ? [...child.activities, activity]
       : child.activities.map((a, i) => (i === idx ? activity : a));
-    await upsertChild({ ...child, activities });
 
+    // Delete all future events of the old activity (clean slate handles day/name changes)
     if (!isNew && existing) {
-      const now = Date.now();
-      const futureLinked = events.filter(
-        (e) => e.childId === childId && e.eventType === existing.name && e.startDateTime >= now,
-      );
-      if (futureLinked.length > 0) {
-        const hasDayTimes = Object.keys(activity.dayTimes).length > 0;
-        await upsertEvents(futureLinked.map((e) => {
-          const dow = JS_DOW[new Date(e.startDateTime).getDay()];
-          const times = hasDayTimes
-            ? (activity.dayTimes[dow] ?? { startTime: "", endTime: "" })
-            : { startTime: activity.startTime, endTime: activity.endTime };
-          return {
-            ...e,
-            title: activity.name,
-            eventType: activity.name,
-            locationName: activity.place || e.locationName,
-            startDateTime: times.startTime ? applyTime(e.startDateTime, times.startTime) : e.startDateTime,
-            endDateTime: times.endTime ? applyTime(e.endDateTime, times.endTime) : e.endDateTime,
-            needsRide: activity.needsRide,
-            rideDirection: activity.rideDirection,
-          };
-        }));
-      }
+      const ids = futurEventIdsForActivity(existing.name);
+      if (ids.length > 0) await deleteEvents(ids);
     }
 
+    await upsertChild({ ...child, activities });
     await generateActivityEvents(activity);
     navigate(`/children/${childId}`);
   };
 
   const handleDelete = async () => {
+    // Delete future events before removing the activity
+    if (existing) {
+      const ids = futurEventIdsForActivity(existing.name);
+      if (ids.length > 0) await deleteEvents(ids);
+    }
     const activities = child.activities.filter((_, i) => i !== idx);
     await upsertChild({ ...child, activities });
     navigate(`/children/${childId}`);

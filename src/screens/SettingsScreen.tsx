@@ -6,7 +6,7 @@ import { type AppLocalConfig } from "@/domain/config";
 import { useInstallPrompt } from "@/lib/useInstallPrompt";
 
 export function SettingsScreen() {
-  const { parent, config, fileHandle, setConfig, closeFile, downloadFile, logOut } = useApp();
+  const { parent, config, fileHandle, fileLoaded, setConfig, closeFile, downloadFile, logOut } = useApp();
   const { canInstall, install } = useInstallPrompt();
   const isStandalone =
     window.matchMedia("(display-mode: standalone)").matches ||
@@ -62,7 +62,7 @@ export function SettingsScreen() {
           </label>
         </div>
 
-        {fileHandle && (
+        {fileLoaded && (
           <div className="card">
             <h2 style={{ marginTop: 0 }}>Sync</h2>
             <label>Auto-sync interval (minutes, 0 = off)

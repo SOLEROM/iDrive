@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { defaultAppLocalConfig, type AppLocalConfig } from "@/domain/config";
 import type { Child, Event, RideAssignment } from "@/domain/models";
 import {
-  openExistingFile, createNewFile, writeToHandle, persistHandle, readFromHandle,
+  openExistingFile, createNewFile, writeToHandle, persistHandle, readFromHandle, loadSavedHandle,
   tryReopenSavedFile, clearSavedHandle, type AppData,
   isFSASupported, openFileFromBuffer, saveDataToIDB, loadDataFromIDB, clearDataFromIDB, buildWorkbookBlob,
   type StoredParent,
@@ -19,6 +19,7 @@ interface AppContextValue {
   fileError: string | null;
   fileHandle: FileSystemFileHandle | null;
   isSyncing: boolean;
+  syncNeeded: boolean;
   lastSyncAt: number | null;
 
   parent: AppParent | null;
@@ -29,6 +30,7 @@ interface AppContextValue {
   assignments: RideAssignment[];
 
   sync(): Promise<void>;
+  syncFromBuffer(buf: ArrayBuffer): Promise<void>;
   openFile(): Promise<void>;
   openFileFromBuffer(buf: ArrayBuffer): Promise<void>;
   createFile(): Promise<void>;
@@ -44,6 +46,7 @@ interface AppContextValue {
   upsertEvent(event: Event): Promise<void>;
   upsertEvents(events: Event[]): Promise<void>;
   deleteEvent(eventId: string): Promise<void>;
+  deleteEvents(eventIds: string[]): Promise<void>;
   upsertAssignment(assignment: RideAssignment): Promise<void>;
 }
 
@@ -90,6 +93,7 @@ export function AppProvider({ children: reactChildren }: { children: React.React
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncNeeded, setSyncNeeded] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [data, setData] = useState<AppData>(makeEmptyData());
   const dataRef = useRef(data);
@@ -102,22 +106,25 @@ export function AppProvider({ children: reactChildren }: { children: React.React
     (async () => {
       try {
         if (isFSASupported()) {
-          const result = await tryReopenSavedFile();
-          if (result) {
-            dataRef.current = result.data;
-            setFileHandle(result.handle);
-            setData(result.data);
-            setFileLoaded(true);
-          }
-        } else {
-          const saved = await loadDataFromIDB();
-          if (saved) {
-            dataRef.current = saved;
-            setData(saved);
-            setFileLoaded(true);
-          }
+          try {
+            const result = await tryReopenSavedFile();
+            if (result) {
+              dataRef.current = result.data;
+              setFileHandle(result.handle);
+              setData(result.data);
+              setFileLoaded(true);
+              return;
+            }
+          } catch { /* permission expired or FSA error — fall through to IDB */ }
         }
-      } catch { /* no saved file — stay on open screen */ }
+        // Always try IDB: covers iOS, Android, and FSA permission-expiry after refresh
+        const saved = await loadDataFromIDB();
+        if (saved) {
+          dataRef.current = saved;
+          setData(saved);
+          setFileLoaded(true);
+        }
+      } catch { /* no saved data — show open screen */ }
       finally { setIsLoading(false); }
     })();
   }, []);
@@ -125,40 +132,84 @@ export function AppProvider({ children: reactChildren }: { children: React.React
   const save = async (handle: FileSystemFileHandle | null, next: AppData) => {
     dataRef.current = next;
     setData(next);
-    if (handle) {
-      await writeToHandle(handle, next);
-    } else {
-      await saveDataToIDB(next);
-    }
+    if (handle) await writeToHandle(handle, next);
+    await saveDataToIDB(next); // always cache in IDB so refresh restores session
   };
 
   // Stable sync function — reads from refs to avoid stale closures
   const sync = useCallback(async () => {
-    const handle = fileHandleRef.current;
-    if (!handle || isSyncingRef.current) return;
+    if (isSyncingRef.current) return;
+
+    let handle = fileHandleRef.current;
+
+    // If the live handle was lost (permission expired after refresh), try to regain it.
+    // requestPermission requires a user gesture — clicking Sync satisfies that.
+    if (!handle && isFSASupported()) {
+      try {
+        const saved = await loadSavedHandle();
+        if (saved) {
+          const perm = await saved.requestPermission({ mode: "readwrite" });
+          if (perm === "granted") {
+            handle = saved;
+            setFileHandle(saved);
+            fileHandleRef.current = saved;
+          }
+        }
+      } catch { return; }
+      if (!handle) return;
+    }
+
+    if (!handle) return;
     isSyncingRef.current = true;
     setIsSyncing(true);
     try {
       const remote = await readFromHandle(handle);
       const merged = mergeData(dataRef.current, remote);
       await writeToHandle(handle, merged);
+      await saveDataToIDB(merged);
       dataRef.current = merged;
       setData(merged);
       setLastSyncAt(Date.now());
-    } catch { /* sync errors are silent — file may be locked by another process */ }
+    } catch { /* silent — file may be locked by Dropbox */ }
     finally {
       isSyncingRef.current = false;
       setIsSyncing(false);
     }
   }, []);
 
-  // Auto-sync timer
+  // Auto-sync timer — FSA: calls sync(); iOS/IDB: sets syncNeeded badge
   useEffect(() => {
     const minutes = data.config.syncIntervalMinutes;
-    if (!fileHandle || !minutes) return;
-    const id = setInterval(sync, minutes * 60_000);
+    if (!minutes || !fileLoaded) return;
+    const id = setInterval(() => {
+      if (fileHandleRef.current) {
+        sync();
+      } else {
+        setSyncNeeded(true); // can't auto-pick file on iOS — show badge instead
+      }
+    }, minutes * 60_000);
     return () => clearInterval(id);
-  }, [fileHandle, data.config.syncIntervalMinutes, sync]);
+  }, [fileHandle, fileLoaded, data.config.syncIntervalMinutes, sync]);
+
+  // iOS sync: read file from user-picked buffer, merge into IDB
+  const syncFromBuffer = useCallback(async (buf: ArrayBuffer) => {
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    setIsSyncing(true);
+    setSyncNeeded(false);
+    try {
+      const remote = await openFileFromBuffer(buf);
+      const merged = mergeData(dataRef.current, remote);
+      await saveDataToIDB(merged);
+      dataRef.current = merged;
+      setData(merged);
+      setLastSyncAt(Date.now());
+    } catch { /* ignore bad file */ }
+    finally {
+      isSyncingRef.current = false;
+      setIsSyncing(false);
+    }
+  }, []);
 
   const openFile = async () => {
     setFileError(null);
@@ -318,6 +369,17 @@ export function AppProvider({ children: reactChildren }: { children: React.React
     });
   };
 
+  const deleteEvents = async (eventIds: string[]) => {
+    if (!fileHandle && isFSASupported()) return;
+    const idSet = new Set(eventIds);
+    const d = dataRef.current;
+    await save(fileHandle, {
+      ...d,
+      events: d.events.filter((e) => !idSet.has(e.eventId)),
+      assignments: d.assignments.filter((a) => !idSet.has(a.eventId)),
+    });
+  };
+
   const upsertAssignment = async (assignment: RideAssignment) => {
     if (!fileHandle && isFSASupported()) return;
     const now = Date.now();
@@ -339,16 +401,16 @@ export function AppProvider({ children: reactChildren }: { children: React.React
 
   return (
     <Ctx.Provider value={{
-      isLoading, fileLoaded, fileError, fileHandle, isSyncing, lastSyncAt,
+      isLoading, fileLoaded, fileError, fileHandle, isSyncing, syncNeeded, lastSyncAt,
       parent: activeParent,
       parents: data.parents,
       config: data.config,
       children: data.children.filter((c) => !c.isArchived),
       events: data.events,
       assignments: data.assignments,
-      sync, openFile, openFileFromBuffer: openFileFromBufferFn, createFile, closeFile, downloadFile,
+      sync, syncFromBuffer, openFile, openFileFromBuffer: openFileFromBufferFn, createFile, closeFile, downloadFile,
       addParentAndSwitch, switchParent, logOut,
-      setConfig, upsertChild, upsertEvent, upsertEvents, deleteEvent, upsertAssignment,
+      setConfig, upsertChild, upsertEvent, upsertEvents, deleteEvent, deleteEvents, upsertAssignment,
     }}>
       {reactChildren}
     </Ctx.Provider>

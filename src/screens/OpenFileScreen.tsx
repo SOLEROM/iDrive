@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useApp } from "@/state/AppContext";
 
 export function OpenFileScreen() {
@@ -9,11 +9,13 @@ export function OpenFileScreen() {
   } = useApp();
   const [newUserName, setNewUserName] = useState("");
   const [addingUser, setAddingUser] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hasFSA = "showOpenFilePicker" in window;
 
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = ""; // reset so the same file can be re-selected
     if (!file) return;
     await openFileFromBuffer(await file.arrayBuffer());
   };
@@ -94,10 +96,10 @@ export function OpenFileScreen() {
         )}
 
         <div className="card" style={{ width: "min(100%, 360px)" }}>
-          <label className="btn btn--full" style={{ display: "block", textAlign: "center", cursor: "pointer" }}>
+          <input ref={fileInputRef} type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleFileInput} />
+          <button className="btn btn--full" onClick={() => fileInputRef.current?.click()} disabled={isLoading}>
             {isLoading ? "Loading…" : "Open idrive.xlsx"}
-            <input type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleFileInput} disabled={isLoading} />
-          </label>
+          </button>
           <button className="btn btn--full" style={{ marginTop: 8 }} onClick={createFile} disabled={isLoading}>
             {isLoading ? "Creating…" : "Create new file"}
           </button>
