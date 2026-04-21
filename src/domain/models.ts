@@ -23,8 +23,9 @@ export interface Activity {
   name: string;
   days: string[];    // array of DayOfWeek values; empty = every day
   place: string;
-  startTime: string; // "HH:MM" or ""
-  endTime: string;   // "HH:MM" or ""
+  startTime: string; // legacy fallback "HH:MM" or ""
+  endTime: string;   // legacy fallback "HH:MM" or ""
+  dayTimes: Record<string, { startTime: string; endTime: string }>; // per-day times; keys are DayOfWeek values
   repeating: boolean; // default true; false = "one time only" (generates one event)
   needsRide: boolean;
   rideDirection: RideDirection;
@@ -32,7 +33,7 @@ export interface Activity {
 }
 
 export function newActivity(partial: Partial<Activity> & Pick<Activity, "name">): Activity {
-  return { days: [], place: "", startTime: "", endTime: "", repeating: true, needsRide: false, rideDirection: RD.BOTH, notes: "", ...partial };
+  return { days: [], place: "", startTime: "", endTime: "", dayTimes: {}, repeating: true, needsRide: false, rideDirection: RD.BOTH, notes: "", ...partial };
 }
 
 export interface Parent {

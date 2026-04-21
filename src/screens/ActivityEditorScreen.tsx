@@ -4,7 +4,7 @@ import { Header } from "@/components/Header";
 import { useApp } from "@/state/AppContext";
 import { RideDirection } from "@/domain/enums";
 import { newActivity, newEvent, type Event } from "@/domain/models";
-import { getDayOfWeekLabel, getDayOrder, getEveryDayLabel } from "@/lib/i18n";
+import { getDayOfWeekLabel, getDayOrder } from "@/lib/i18n";
 
 const JS_DOW: Record<number, string> = {
   0: "SUNDAY", 1: "MONDAY", 2: "TUESDAY", 3: "WEDNESDAY",
@@ -29,10 +29,7 @@ export function ActivityEditorScreen() {
   const existing = !isNew && child ? child.activities[idx] ?? null : null;
 
   const [name, setName] = useState(existing?.name ?? "");
-  const [days, setDays] = useState<string[]>(existing?.days ?? []);
   const [place, setPlace] = useState(existing?.place ?? "");
-  const [startTime, setStartTime] = useState(existing?.startTime ?? "");
-  const [endTime, setEndTime] = useState(existing?.endTime ?? "");
   const [oneTime, setOneTime] = useState(!(existing?.repeating ?? true));
   const [notes, setNotes] = useState(existing?.notes ?? "");
   const [needsRide, setNeedsRide] = useState(existing?.needsRide ?? true);
@@ -43,14 +40,45 @@ export function ActivityEditorScreen() {
     existing ? existing.rideDirection !== RideDirection.TO : true,
   );
 
+  const initDayTimes = (): Record<string, { startTime: string; endTime: string }> => {
+    if (existing?.dayTimes && Object.keys(existing.dayTimes).length > 0) {
+      return existing.dayTimes;
+    }
+    // Migrate old single-time activities
+    if (existing && existing.days.length > 0 && (existing.startTime || existing.endTime)) {
+      const result: Record<string, { startTime: string; endTime: string }> = {};
+      for (const d of existing.days) {
+        result[d] = { startTime: existing.startTime, endTime: existing.endTime };
+      }
+      return result;
+    }
+    return {};
+  };
+
+  const [dayTimes, setDayTimes] = useState<Record<string, { startTime: string; endTime: string }>>(initDayTimes);
+
   if (!child) return (
     <><Header title="Activity" back /><main className="app-main"><div className="card empty">Child not found.</div></main></>
   );
 
+  const allDays = getDayOrder(config.language);
+
   const toggleDay = (d: string) => {
-    setDays((prev) =>
-      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]
-    );
+    setDayTimes((prev) => {
+      if (d in prev) {
+        const next = { ...prev };
+        delete next[d];
+        return next;
+      }
+      return { ...prev, [d]: { startTime: "", endTime: "" } };
+    });
+  };
+
+  const setDayTime = (d: string, field: "startTime" | "endTime", val: string) => {
+    setDayTimes((prev) => ({
+      ...prev,
+      [d]: { ...(prev[d] ?? { startTime: "", endTime: "" }), [field]: val },
+    }));
   };
 
   const applyTime = (dateMs: number, timeStr: string): number => {
@@ -64,15 +92,20 @@ export function ActivityEditorScreen() {
   const generateActivityEvents = async (activity: ReturnType<typeof newActivity>) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    // Generate through end of next month for at least 6 weeks of visibility
     const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 2, 0, 23, 59, 59, 999);
     const slug = activity.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 12);
     const childSuffix = childId.slice(-6);
 
+    const hasDayTimes = Object.keys(activity.dayTimes).length > 0;
+    const activeDays = hasDayTimes ? Object.keys(activity.dayTimes) : activity.days;
+
     const toUpsert: Event[] = [];
     for (let d = new Date(today); d <= endOfMonth; d.setDate(d.getDate() + 1)) {
       const dow = JS_DOW[d.getDay()];
-      if (activity.days.length > 0 && !activity.days.includes(dow)) continue;
+      if (activeDays.length > 0 && !activeDays.includes(dow)) continue;
+      const times = hasDayTimes
+        ? (activity.dayTimes[dow] ?? { startTime: "", endTime: "" })
+        : { startTime: activity.startTime, endTime: activity.endTime };
       const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const dayStart = new Date(d).setHours(0, 0, 0, 0);
       toUpsert.push(newEvent({
@@ -82,21 +115,24 @@ export function ActivityEditorScreen() {
         eventType: activity.name,
         description: activity.notes,
         createdByParentId: parent?.parentId ?? "anon",
-        startDateTime: applyTime(dayStart, activity.startTime),
-        endDateTime: applyTime(dayStart, activity.endTime || activity.startTime),
+        startDateTime: applyTime(dayStart, times.startTime),
+        endDateTime: applyTime(dayStart, times.endTime || times.startTime),
         locationName: activity.place,
         needsRide: activity.needsRide,
         rideDirection: activity.rideDirection,
       }));
-      if (!activity.repeating) break; // one-time: only first matching day
+      if (!activity.repeating) break;
     }
     if (toUpsert.length > 0) await upsertEvents(toUpsert);
   };
 
   const handleSave = async () => {
+    const days = allDays.filter((d) => d in dayTimes);
     const rideDirection = directionFromChecks(rideTo, rideFrom);
     const activity = newActivity({
-      name: name.trim(), days, place, startTime, endTime,
+      name: name.trim(), days, place,
+      startTime: "", endTime: "",
+      dayTimes,
       repeating: !oneTime, needsRide, rideDirection, notes,
     });
     const activities = isNew
@@ -104,29 +140,33 @@ export function ActivityEditorScreen() {
       : child.activities.map((a, i) => (i === idx ? activity : a));
     await upsertChild({ ...child, activities });
 
-    // Update future events that were already generated from this activity
     if (!isNew && existing) {
       const now = Date.now();
       const futureLinked = events.filter(
         (e) => e.childId === childId && e.eventType === existing.name && e.startDateTime >= now,
       );
       if (futureLinked.length > 0) {
-        await upsertEvents(futureLinked.map((e) => ({
-          ...e,
-          title: activity.name,
-          eventType: activity.name,
-          locationName: activity.place || e.locationName,
-          startDateTime: applyTime(e.startDateTime, activity.startTime),
-          endDateTime: applyTime(e.endDateTime, activity.endTime),
-          needsRide: activity.needsRide,
-          rideDirection: activity.rideDirection,
-        })));
+        const hasDayTimes = Object.keys(activity.dayTimes).length > 0;
+        await upsertEvents(futureLinked.map((e) => {
+          const dow = JS_DOW[new Date(e.startDateTime).getDay()];
+          const times = hasDayTimes
+            ? (activity.dayTimes[dow] ?? { startTime: "", endTime: "" })
+            : { startTime: activity.startTime, endTime: activity.endTime };
+          return {
+            ...e,
+            title: activity.name,
+            eventType: activity.name,
+            locationName: activity.place || e.locationName,
+            startDateTime: times.startTime ? applyTime(e.startDateTime, times.startTime) : e.startDateTime,
+            endDateTime: times.endTime ? applyTime(e.endDateTime, times.endTime) : e.endDateTime,
+            needsRide: activity.needsRide,
+            rideDirection: activity.rideDirection,
+          };
+        }));
       }
     }
 
-    // Generate (or fill gaps for) events from today to end of month
     await generateActivityEvents(activity);
-
     navigate(`/children/${childId}`);
   };
 
@@ -146,37 +186,45 @@ export function ActivityEditorScreen() {
               onChange={(e) => setName(e.target.value)}
               placeholder="Activity name" />
           </label>
-          <div>
-            <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
-              <span>Days</span>
-              <button className="btn btn--sm" onClick={() => setDays(getDayOrder(config.language))}>
-                {getEveryDayLabel(config.language)}
-              </button>
-            </div>
-            <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-              {getDayOrder(config.language).map((d) => (
-                <label key={d} className="row" style={{ gap: 4, cursor: "pointer" }}>
-                  <input type="checkbox" checked={days.includes(d)} onChange={() => toggleDay(d)} />
-                  {getDayOfWeekLabel(d, config.language)}
-                </label>
-              ))}
+
+          <div style={{ marginTop: 8 }}>
+            <span style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Days</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {allDays.map((d) => {
+                const checked = d in dayTimes;
+                const times = dayTimes[d] ?? { startTime: "", endTime: "" };
+                return (
+                  <div key={d} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", minWidth: 110 }}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleDay(d)} />
+                      <span>{getDayOfWeekLabel(d, config.language)}</span>
+                    </label>
+                    {checked && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input type="time" className="input"
+                          style={{ width: 120, padding: "4px 6px", fontSize: 14 }}
+                          value={times.startTime}
+                          onChange={(e) => setDayTime(d, "startTime", e.target.value)} />
+                        <span style={{ color: "var(--muted)", fontSize: 13 }}>–</span>
+                        <input type="time" className="input"
+                          style={{ width: 120, padding: "4px 6px", fontSize: 14 }}
+                          value={times.endTime}
+                          onChange={(e) => setDayTime(d, "endTime", e.target.value)} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
-          <label>Place
+
+          <label style={{ marginTop: 8 }}>Place
             <input className="input" list="activity-locations" value={place}
               onChange={(e) => setPlace(e.target.value)}
               placeholder="Location (optional)" />
             <datalist id="activity-locations">
               {config.globalLocations.map((l) => <option key={l} value={l} />)}
             </datalist>
-          </label>
-          <label>Start time
-            <input type="time" className="input" value={startTime}
-              onChange={(e) => setStartTime(e.target.value)} />
-          </label>
-          <label>End time
-            <input type="time" className="input" value={endTime}
-              onChange={(e) => setEndTime(e.target.value)} />
           </label>
           <label>Notes
             <textarea className="textarea" value={notes} rows={3}
