@@ -1,10 +1,11 @@
-# Kids Rides & Classes Manager
+# Kids Rides & Classes — PWA
 
-An Android app that helps parent groups coordinate children's classes and
-shared rides — without relying on spreadsheets, group chats, or a dedicated
-backend server.
+A **Progressive Web App** that helps parent groups coordinate children's
+classes and shared rides. Installs on Android and iPhone from the browser —
+no app store, no backend server, no cloud account required.
 
-**Package:** `i.drive.kids` · **minSdk:** 26 · **targetSdk:** 35
+**Stack:** React 18 · TypeScript · Vite · Vitest · SheetJS (xlsx) ·
+Workbox service worker · React Router.
 
 ---
 
@@ -12,47 +13,115 @@ backend server.
 
 Parenting groups juggle a lot of logistics — who drives whom, which week a
 child has music vs. football, who already committed to the Tuesday pickup.
-This app makes that shared knowledge explicit and keeps it synced across
-every parent's phone.
+This app makes that shared knowledge explicit and keeps it in a single file
+you control.
 
-- **Private, per-parent storage** — each parent's children, preferences, and
-  private events live in their *own* Google Drive. No central server sees it.
-- **Shared group coordination** — each parent group uses a shared Google
-  Sheet for ride-relevant activities: who's going, who volunteered to drive,
-  what's been completed.
-- **Ride volunteering** — any parent in the group can volunteer for a ride
-  leg (**TO**, **FROM**, or **BOTH**). The Rides Board shows what's
-  unassigned, claimed, confirmed, or done.
-- **Recurring events** — weekly, multi-day, every-N-weeks; one-time overrides
-  supported.
-- **Offline first** — everything is cached in Room. Sync happens in the
-  background when the network is available.
-- **Conflict resolution** — built-in UI for when two parents edit the same
-  row out of sync.
+- **One file, your storage** — everything lives in an `.xlsx` file you open
+  from your device. Put it in Google Drive, iCloud, a USB stick — your choice.
+- **No accounts** — enter your name + email once when creating the file.
+  After that, just open the file and the app knows who you are.
+- **Activities per child** — each child has a list of activities (e.g.
+  "Football", "Piano"). An activity defines the days of week, start/end time,
+  place, and whether it needs ride coordination. Saving an activity
+  automatically generates events for today through the end of the current month.
+- **Events** — auto-generated from activities (or added manually). Each event
+  has a date/time, location, and optional ride request.
+- **Ride volunteering** — any parent can claim a ride leg (**TO**, **FROM**,
+  or **BOTH**). The Rides Board shows what's unclaimed, claimed, confirmed,
+  or done. Filter by child to see that child's colour-tinted view.
+- **Offline-first** — the app shell is cached by the service worker. Once the
+  file is open, everything works without a network connection.
+- **Installable** — Add to Home Screen on iOS; browser install prompt on
+  Android/Chrome.
+
+---
+
+## XLSX file format
+
+The app reads and writes a single `.xlsx` file (conventionally `idrive.xlsx`).
+
+| Tab | Content |
+|---|---|
+| `Config` | App settings (key-value rows) + children list (with activities as JSON) |
+| `0426`, `0526`, … | One tab per month (`MMYY`) — events and ride assignments |
+
+Monthly tabs are created automatically when an event is saved for that month.
 
 ---
 
 ## Who it's for
 
 - A group of 3–20 parents coordinating one or more children's activities
-- Families who'd rather not push their logistics into Google Calendar or a
-  chat group
-- Anyone who wants their family data to stay in their own Drive, not a
-  vendor's server
+- Families who'd rather not push their logistics into a chat group
+- Anyone who wants their family data to stay in a file they own
 
 ---
 
 ## How it's built
 
-- **Kotlin** + **Jetpack Compose** (Material 3)
-- **Room** for local cache, **DataStore** for preferences
-- **Google Drive API** (private parent data) + **Google Sheets API**
-  (shared group data) — mocked in debug builds
-- **Hilt** (DI), **WorkManager** (background sync), **Navigation Compose**
-- **Offline-first**, **immutable-by-default**, ~100 small files over a few
-  big ones
+```
+src/
+├── domain/         ← pure TS: enums, models, config — no side effects
+├── storage/
+│   └── xlsxStorage.ts   ← all XLSX I/O (SheetJS + File System Access API)
+│                          also persists FileSystemFileHandle in IndexedDB
+├── state/
+│   └── AppContext.tsx    ← React context: fileHandle, AppData, all mutations
+├── components/     ← Header, TabBar, ChildDot, RideStatusChip
+├── screens/        ← one file per screen (see screen list below)
+├── pwa/            ← service-worker registration (Workbox)
+├── lib/            ← format helpers, useInstallPrompt
+├── file-system-access.d.ts  ← TS declarations for showOpenFilePicker / showSaveFilePicker
+├── App.tsx         ← router + Shell (guards: loading → open-file → main app)
+└── main.tsx        ← entry point
+```
 
-See `ARCHITECTURE.md` for the full picture.
+### Screens
+
+| Route | Screen | Purpose |
+|---|---|---|
+| *(no file)* | `OpenFileScreen` | Open existing or create new `.xlsx` |
+| `/` | `DashboardScreen` | Upcoming events, my rides, open ride requests (week + month) |
+| `/children` | `ChildrenScreen` | List children; inline add |
+| `/children/:id` | `ChildDetailScreen` | Edit child profile + activities list |
+| `/children/:id/activities/:idx` | `ActivityEditorScreen` | Add/edit activity → generates events |
+| `/events` | `EventsScreen` | All events list |
+| `/events/new` `/events/:id` | `EventEditorScreen` | Add/edit a single event |
+| `/rides` | `RidesBoardScreen` | Claim/unclaim ride legs; filter by child |
+| `/my-rides` | `MyRidesScreen` | My own claimed rides |
+| `/notifications` | `NotificationsScreen` | Notification log |
+| `/settings` | `SettingsScreen` | Theme, language, reminders, locations; close file |
+
+---
+
+## Get started
+
+→ **[`gettingStarted.md`](./gettingStarted.md)** — install, run, test, build, deploy.
+
+Quick start if Node 20+ is already installed:
+
+```bash
+npm install
+npm run dev          # http://localhost:5173
+npm test             # 28 Vitest domain tests
+npm run build        # dist/ — deploy to any static host
+```
+
+Open the app → **Create new file** (enter name + email) or **Open existing file**.
+
+> **Note:** The File System Access API requires a **secure context** (HTTPS
+> or `localhost`). `npm run dev` works on localhost. To test from a phone on
+> LAN use `vite preview --https` or a tunnel.
+
+---
+
+## Installability
+
+**Android (Chrome / Edge)** — tap the "Install app" prompt or browser menu →
+*Install app*. The app opens full-screen like a native install.
+
+**iPhone / iPad (Safari)** — tap Share → *Add to Home Screen*. iOS launches
+it as a standalone app without the Safari chrome.
 
 ---
 
@@ -60,52 +129,25 @@ See `ARCHITECTURE.md` for the full picture.
 
 | Area | Status |
 |---|---|
-| UI (14 screens) | ✅ |
-| Local storage (Room) | ✅ |
-| Mock Drive + Sheets adapters | ✅ |
-| Sync engine (against mocks) | ✅ |
-| Conflict resolution UI | ✅ |
-| Unit tests (42 cases) | ✅ |
-| Real Google Drive/Sheets integration | 🚧 deferred (Phase 4) |
-| FCM push notifications | ❌ |
-| Group join flow (by code) | ❌ |
+| PWA scaffold + Workbox service worker | ✅ |
+| Install manifest (Android + iOS) | ✅ |
+| XLSX persistence (SheetJS + File System Access API) | ✅ |
+| File handle persistence between sessions (IndexedDB) | ✅ |
+| 12 screens (including ActivityEditor) | ✅ |
+| Activity → Event auto-generation (today → end of month) | ✅ |
+| Rides Board with child-colour filter + tint | ✅ |
+| Dashboard: week + month open ride request counts | ✅ |
+| Domain tests (28 Vitest cases) | ✅ |
+| Google Drive auto-upload of the XLSX file | 🚧 deferred |
+| Web Push notifications | ❌ |
+| Group join-by-code flow | ❌ |
 | Hebrew localisation | ❌ |
-| Integration / UI tests | ❌ inventoried only |
-
-Detailed breakdown in `CLAUDE.md` §7.
-
----
-
-## Get started
-
-→ **[`gettingStarted.md`](./gettingStarted.md)** — build, test, emulate, deploy.
-
-→ **[`install.md`](./install.md)** — set up a fresh Ubuntu host from scratch
-(or just run `./install.sh`).
-
----
-
-## Documentation map
-
-| Doc | What's in it |
-|---|---|
-| **[`gettingStarted.md`](./gettingStarted.md)** | Build, test, emulate, deploy — the developer workflow |
-| **[`install.md`](./install.md)** | Fresh-host setup (Ubuntu) |
-| **[`CLAUDE.md`](./CLAUDE.md)** | Context pack for future Claude Code sessions — conventions, known hazards, implementation status |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Module layout, data flow, sync lifecycle |
-| [`DATA_MODEL.md`](./DATA_MODEL.md) | All entities, Drive JSON schema, Sheet schema |
-| [`SYNC_DESIGN.md`](./SYNC_DESIGN.md) | Sync triggers, conflict policy, retry logic |
-| [`CONFIG_MODEL.md`](./CONFIG_MODEL.md) | All 4 config scopes and their fields |
-| [`UX_GUIDELINES.md`](./UX_GUIDELINES.md) | Color rules, screen inventory, component patterns |
-| [`BUILD_AND_RELEASE.md`](./BUILD_AND_RELEASE.md) | Full build, sign, install, and sideload reference |
-| [`TEST_PLAN.md`](./TEST_PLAN.md) | Manual QA flows and automated test inventory |
-| [`plan1.md`](./plan1.md) | Original product spec (authoritative for product intent) |
 
 ---
 
 ## Privacy posture
 
-No accounts on our server — there is no "our server". Data lives in the
-parent's Google Drive (private data) or the group's shared Google Sheet
-(coordination data). Parents can revoke access at any time by removing the
-app from their Google account.
+No accounts, no server, no analytics. Your data lives entirely in the `.xlsx`
+file you choose. The service worker caches the app shell locally. Clearing
+browser data removes the cached shell and the stored file handle, but your
+`.xlsx` file is untouched wherever you saved it.
