@@ -6,8 +6,10 @@ import { type AppLocalConfig } from "@/domain/config";
 import { useInstallPrompt } from "@/lib/useInstallPrompt";
 
 export function SettingsScreen() {
-  const { parent, config, fileHandle, fileLoaded, setConfig, closeFile, downloadFile, logOut } = useApp();
+  const { parent, parents, config, setConfig, signOut, downloadFile, inviteMember } = useApp();
   const { canInstall, install } = useInstallPrompt();
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteMsg, setInviteMsg] = useState("");
   const isStandalone =
     window.matchMedia("(display-mode: standalone)").matches ||
     !!(navigator as Navigator & { standalone?: boolean }).standalone;
@@ -41,6 +43,35 @@ export function SettingsScreen() {
         </div>
 
         <div className="card">
+          <h2 style={{ marginTop: 0 }}>Members</h2>
+          {parents.map((p) => (
+            <p key={p.parentId} style={{ margin: "4px 0", fontSize: 14 }}>
+              {p.displayName}{p.parentId === parent?.parentId ? " (you)" : ""}
+            </p>
+          ))}
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 10, paddingTop: 10 }}>
+            <p style={{ margin: "0 0 6px", fontSize: 13, color: "var(--muted)" }}>Invite by email</p>
+            <div className="row" style={{ gap: 8 }}>
+              <input className="input" style={{ flex: 1 }} type="email" placeholder="family@example.com"
+                value={inviteEmail} onChange={(e) => { setInviteEmail(e.target.value); setInviteMsg(""); }} />
+              <button className="btn" onClick={async () => {
+                const err = await inviteMember(inviteEmail);
+                setInviteMsg(err || "Invite sent!");
+                if (!err) setInviteEmail("");
+              }}>Invite</button>
+            </div>
+            {inviteMsg && (
+              <p style={{ margin: "6px 0 0", fontSize: 13, color: inviteMsg === "Invite sent!" ? "var(--ok)" : "var(--danger)" }}>
+                {inviteMsg}
+              </p>
+            )}
+            <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--muted)" }}>
+              They sign in with that Google account and join automatically.
+            </p>
+          </div>
+        </div>
+
+        <div className="card">
           <h2 style={{ marginTop: 0 }}>Appearance</h2>
           <label>Theme
             <select className="select" value={config.themeMode}
@@ -61,17 +92,6 @@ export function SettingsScreen() {
             </select>
           </label>
         </div>
-
-        {fileLoaded && (
-          <div className="card">
-            <h2 style={{ marginTop: 0 }}>Sync</h2>
-            <label>Auto-sync interval (minutes, 0 = off)
-              <input className="input" type="number" min={0} max={60}
-                value={config.syncIntervalMinutes}
-                onChange={(e) => set("syncIntervalMinutes", Math.max(0, Math.min(60, Number(e.target.value))))} />
-            </label>
-          </div>
-        )}
 
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Reminders</h2>
@@ -126,31 +146,24 @@ export function SettingsScreen() {
               ? <button className="btn btn--full" style={{ marginTop: 8 }} onClick={install}>Install app</button>
               : isIOSChrome
                 ? <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 0 }}>
-                    Chrome on iPhone can't install apps. Open this page in <strong>Safari</strong>, then tap
-                    the Share button and choose <strong>Add to Home Screen</strong>.
+                    Chrome on iPhone can't install apps. Open in <strong>Safari</strong>, then Share → <strong>Add to Home Screen</strong>.
                   </p>
                 : isIOSSafari
                   ? <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 0 }}>
-                      Tap the <strong>Share</strong> button at the bottom of Safari, then choose <strong>Add to Home Screen</strong>.
+                      Tap <strong>Share</strong> in Safari → <strong>Add to Home Screen</strong>.
                     </p>
                   : <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 0 }}>
-                      Open the browser menu and choose <strong>Add to Home Screen</strong>.
+                      Open the browser menu → <strong>Add to Home Screen</strong>.
                     </p>
           )}
         </div>
 
-        {!fileHandle && (
-          <button className="btn btn--full" onClick={downloadFile} style={{ marginTop: 16 }}>
-            Download idrive.xlsx
-          </button>
-        )}
-
-        <button className="btn btn--full" onClick={logOut} style={{ marginTop: 8 }}>
-          Switch user
+        <button className="btn btn--full" onClick={downloadFile} style={{ marginTop: 16 }}>
+          Download backup (.xlsx)
         </button>
 
-        <button className="btn btn--danger btn--full" onClick={closeFile} style={{ marginTop: 8 }}>
-          Close file (erase all local data)
+        <button className="btn btn--danger btn--full" onClick={signOut} style={{ marginTop: 8, marginBottom: 24 }}>
+          Sign out
         </button>
       </main>
     </>

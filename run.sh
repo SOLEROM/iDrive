@@ -6,22 +6,23 @@ cd "$(dirname "$0")"
 MODE="dev"
 for arg in "$@"; do
   case "$arg" in
-    --prod)  MODE="prod" ;;
-    --dev)   MODE="dev" ;;
-    --cloud) MODE="cloud" ;;
+    --prod)     MODE="prod" ;;
+    --dev)      MODE="dev" ;;
+    --cloud)    MODE="cloud" ;;
+    --firebase) MODE="firebase" ;;
     -h|--help)
       cat <<EOF
-Usage: $0 [--dev|--prod|--cloud]
-  --dev    (default) HTTPS Vite dev server on :5173 with HMR
-  --prod   build + HTTPS preview of dist/ on :4173 (self-signed cert)
-  --cloud  build + Cloudflare quick tunnel — real HTTPS, works on any device/network,
-           and unblocks Chrome's "Install app" prompt
+Usage: $0 [--dev|--prod|--cloud|--firebase]
+  --dev       (default) HTTPS Vite dev server on :5173 with HMR
+  --prod      build + HTTPS preview of dist/ on :4173 (self-signed cert)
+  --cloud     build + Cloudflare quick tunnel — real HTTPS, works on any device/network
+  --firebase  build + deploy to Firebase Hosting (idrive-8bcdc.web.app) — stable URL, no auth issues
 EOF
       exit 0
       ;;
     *)
       echo "Unknown arg: $arg" >&2
-      echo "Usage: $0 [--dev|--prod|--cloud]" >&2
+      echo "Usage: $0 [--dev|--prod|--cloud|--firebase]" >&2
       exit 1
       ;;
   esac
@@ -33,6 +34,20 @@ if [ -z "${LAN_IP:-}" ]; then
 fi
 
 case "$MODE" in
+  firebase)
+    echo "==> Building production bundle..."
+    npm run build
+    echo "==> Checking Firebase login..."
+    npx --yes firebase-tools login --no-localhost 2>/dev/null || true
+    echo "==> Deploying to Firebase Hosting..."
+    npx --yes firebase-tools deploy --only hosting
+    echo ""
+    echo "============================================"
+    echo "  Live at: https://idrive-8bcdc.web.app"
+    echo "  (URL never changes — no auth domain issues)"
+    echo "============================================"
+    ;;
+
   prod)
     echo "==> Building production bundle (includes service worker)..."
     npm run build

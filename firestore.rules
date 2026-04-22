@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isMember(groupId) {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/groups/$(groupId)/parents/$(request.auth.uid));
+    }
+
+    // User profiles: stores groupId so the same account syncs across devices.
+    match /userProfiles/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Invites: a member writes an invite for an email; that email owner reads/deletes it.
+    match /invites/{email} {
+      allow read, delete: if request.auth != null &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() == email;
+      allow create: if request.auth != null;
+    }
+
+    // Group root: any auth user can create (first-time setup); members can update.
+    match /groups/{groupId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if isMember(groupId);
+    }
+
+    // Parents: any auth user can write their OWN record (join via invite).
+    match /groups/{groupId}/parents/{parentId} {
+      allow read: if isMember(groupId);
+      allow write: if request.auth != null && request.auth.uid == parentId;
+    }
+
+    // All other data: members only.
+    match /groups/{groupId}/{sub}/{docId} {
+      allow read, write: if isMember(groupId);
+    }
+  }
+}

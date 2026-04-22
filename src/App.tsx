@@ -22,9 +22,9 @@ export function App() {
 }
 
 function Shell() {
-  const { parent, isLoading } = useApp();
+  const { isLoading, authUser, parent } = useApp();
   if (isLoading) return <div className="splash"><p>Loading…</p></div>;
-  if (!parent) return <OpenFileScreen />;
+  if (!authUser || !parent) return <OpenFileScreen />;
   return (
     <div className="app">
       <Routes>
@@ -39,7 +39,7 @@ function Shell() {
         <Route path="/my-rides" element={<MyRidesScreen />} />
         <Route path="/notifications" element={<NotificationsScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
-<Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <TabBar />
     </div>
