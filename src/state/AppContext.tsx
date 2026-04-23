@@ -5,9 +5,10 @@ import {
 } from "firebase/auth";
 import type { User } from "firebase/auth";
 import {
-  collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch, getDoc,
+  collection, doc, setDoc, onSnapshot, writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "@/firebase";
+import { families } from "@/familiesData";
 import { defaultAppLocalConfig, type AppLocalConfig } from "@/domain/config";
 import type { Activity, Child, Event, RideAssignment } from "@/domain/models";
 import { buildWorkbookBlob, type AppData } from "@/storage/xlsxStorage";
@@ -49,12 +50,9 @@ interface SharedConfig {
 const groupDoc = (gid: string) => doc(db, "groups", gid);
 const subCol = (gid: string, sub: string) => collection(db, "groups", gid, sub);
 const subDoc = (gid: string, sub: string, id: string) => doc(db, "groups", gid, sub, id);
-const inviteDoc = (email: string) => doc(db, "invites", email.toLowerCase().trim());
-const profileDoc = (uid: string) => doc(db, "userProfiles", uid);
 
-function generateGroupCode(): string {
-  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
-  return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+function findFamily(email: string) {
+  return families.find((f) => f.members.includes(email.toLowerCase().trim()));
 }
 
 // ── Context interface ─────────────────────────────────────────────────────────
@@ -67,6 +65,7 @@ export interface AppParent {
 interface AppContextValue {
   isLoading: boolean;
   authUser: User | null;
+  authError: string | null;
   groupId: string | null;
 
   parent: AppParent | null;
@@ -78,7 +77,6 @@ interface AppContextValue {
 
   signInWithGoogle(): Promise<void>;
   signOut(): Promise<void>;
-  inviteMember(email: string): Promise<string>;
 
   downloadFile(): void;
   setConfig(next: Partial<AppLocalConfig>): Promise<void>;
@@ -96,6 +94,7 @@ const Ctx = createContext<AppContextValue | null>(null);
 export function AppProvider({ children: reactChildren }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [groupId, setGroupId] = useState<string | null>(null);
   const [parents, setParents] = useState<AppParent[]>([]);
   const [children, setChildren] = useState<Child[]>([]);
@@ -104,10 +103,12 @@ export function AppProvider({ children: reactChildren }: { children: React.React
   const [sharedConfig, setSharedConfig] = useState<SharedConfig>({ globalLocations: [], globalActivities: [] });
   const [localConfig, setLocalConfigState] = useState<LocalConfig>(loadLocalConfig);
 
-  // ── Auth + auto group setup ───────────────────────────────────────────────
+  // ── Auth + group lookup ───────────────────────────────────────────────────
   useEffect(() => {
     return onAuthStateChanged(auth, async (user) => {
       setAuthUser(user);
+      setAuthError(null);
+
       if (!user) {
         setGroupId(null);
         setParents([]);
@@ -119,64 +120,44 @@ export function AppProvider({ children: reactChildren }: { children: React.React
         return;
       }
 
-      // 1. Already set up on this device (localStorage cache)?
-      const saved = localStorage.getItem(`${GROUP_ID_KEY}-${user.uid}`);
-      if (saved) {
-        setGroupId(saved);
+      // Fast path: already resolved on this device
+      const cached = localStorage.getItem(`${GROUP_ID_KEY}-${user.uid}`);
+      if (cached) {
+        setGroupId(cached);
+        setIsLoading(false);
+        return;
+      }
+
+      // Check families bundle (embedded at build time from families.yaml)
+      const family = user.email ? findFamily(user.email) : null;
+      if (!family) {
+        await firebaseSignOut(auth);
+        setAuthError("Your account is not authorised. Contact your group admin.");
         setIsLoading(false);
         return;
       }
 
       try {
-        // 2. Same account signed in elsewhere — find existing group from Firestore profile
-        const profile = await getDoc(profileDoc(user.uid));
-        if (profile.exists()) {
-          const gid = (profile.data() as { groupId: string }).groupId;
-          localStorage.setItem(`${GROUP_ID_KEY}-${user.uid}`, gid);
-          setGroupId(gid);
-          setIsLoading(false);
-          return;
-        }
+        // Ensure group root doc exists (first member creates it; merge = safe for rest)
+        const displayName = user.displayName?.trim() || user.email!.split("@")[0];
+        await setDoc(groupDoc(family.groupId), {
+          groupName: family.name,
+          members: family.members,
+          globalLocations: [],
+          globalActivities: [],
+        }, { merge: true });
 
-        // 3. Check for a pending email invite
-        if (user.email) {
-          const invite = await getDoc(inviteDoc(user.email));
-          if (invite.exists()) {
-            const { groupId: gid } = invite.data() as { groupId: string };
-            await joinGroupAs(user, gid);
-            await deleteDoc(inviteDoc(user.email));
-            setIsLoading(false);
-            return;
-          }
-        }
+        // Register in parents collection
+        await setDoc(subDoc(family.groupId, "parents", user.uid), { displayName, email: user.email ?? "" }, { merge: true });
 
-        // 4. No group anywhere — create a fresh one
-        await createGroupFor(user);
-      } catch { /* silent — user will see empty state */ }
+        localStorage.setItem(`${GROUP_ID_KEY}-${user.uid}`, family.groupId);
+        setGroupId(family.groupId);
+      } catch {
+        setAuthError("Sign-in failed. Try again.");
+      }
       setIsLoading(false);
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const displayNameFor = (user: User) =>
-    user.displayName?.trim() || user.email?.split("@")[0] || "Me";
-
-  const createGroupFor = async (user: User) => {
-    const gid = generateGroupCode();
-    const now = Date.now();
-    await setDoc(groupDoc(gid), { globalLocations: [], globalActivities: [], createdAt: now, createdByUid: user.uid });
-    await setDoc(subDoc(gid, "parents", user.uid), { displayName: displayNameFor(user), email: user.email ?? "" });
-    await setDoc(profileDoc(user.uid), { groupId: gid });
-    localStorage.setItem(`${GROUP_ID_KEY}-${user.uid}`, gid);
-    setGroupId(gid);
-  };
-
-  const joinGroupAs = async (user: User, gid: string) => {
-    await setDoc(subDoc(gid, "parents", user.uid), { displayName: displayNameFor(user), email: user.email ?? "" });
-    await setDoc(profileDoc(user.uid), { groupId: gid });
-    localStorage.setItem(`${GROUP_ID_KEY}-${user.uid}`, gid);
-    setGroupId(gid);
-  };
 
   // ── Firestore listeners ───────────────────────────────────────────────────
   useEffect(() => {
@@ -234,6 +215,7 @@ export function AppProvider({ children: reactChildren }: { children: React.React
 
   // ── Auth actions ──────────────────────────────────────────────────────────
   const signInWithGoogle = async () => {
+    setAuthError(null);
     const provider = new GoogleAuthProvider();
     await signInWithPopup(auth, provider);
   };
@@ -241,18 +223,6 @@ export function AppProvider({ children: reactChildren }: { children: React.React
   const signOut = async () => {
     if (authUser) localStorage.removeItem(`${GROUP_ID_KEY}-${authUser.uid}`);
     await firebaseSignOut(auth);
-  };
-
-  const inviteMember = async (email: string): Promise<string> => {
-    if (!groupId || !authUser) return "Not in a group";
-    const normalized = email.trim().toLowerCase();
-    if (!normalized.includes("@")) return "Invalid email address";
-    try {
-      await setDoc(inviteDoc(normalized), { groupId, invitedBy: authUser.uid, invitedAt: Date.now() });
-      return "";
-    } catch {
-      return "Failed to send invite";
-    }
   };
 
   // ── Data mutations ────────────────────────────────────────────────────────
@@ -336,6 +306,7 @@ export function AppProvider({ children: reactChildren }: { children: React.React
     <Ctx.Provider value={{
       isLoading,
       authUser,
+      authError,
       groupId,
       parent,
       parents,
@@ -345,7 +316,6 @@ export function AppProvider({ children: reactChildren }: { children: React.React
       assignments,
       signInWithGoogle,
       signOut,
-      inviteMember,
       downloadFile,
       setConfig,
       upsertChild,

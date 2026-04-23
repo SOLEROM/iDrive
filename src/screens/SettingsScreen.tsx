@@ -6,10 +6,8 @@ import { type AppLocalConfig } from "@/domain/config";
 import { useInstallPrompt } from "@/lib/useInstallPrompt";
 
 export function SettingsScreen() {
-  const { parent, parents, config, setConfig, signOut, downloadFile, inviteMember } = useApp();
+  const { parent, parents, config, setConfig, signOut, downloadFile } = useApp();
   const { canInstall, install } = useInstallPrompt();
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteMsg, setInviteMsg] = useState("");
   const isStandalone =
     window.matchMedia("(display-mode: standalone)").matches ||
     !!(navigator as Navigator & { standalone?: boolean }).standalone;
@@ -49,26 +47,9 @@ export function SettingsScreen() {
               {p.displayName}{p.parentId === parent?.parentId ? " (you)" : ""}
             </p>
           ))}
-          <div style={{ borderTop: "1px solid var(--border)", marginTop: 10, paddingTop: 10 }}>
-            <p style={{ margin: "0 0 6px", fontSize: 13, color: "var(--muted)" }}>Invite by email</p>
-            <div className="row" style={{ gap: 8 }}>
-              <input className="input" style={{ flex: 1 }} type="email" placeholder="family@example.com"
-                value={inviteEmail} onChange={(e) => { setInviteEmail(e.target.value); setInviteMsg(""); }} />
-              <button className="btn" onClick={async () => {
-                const err = await inviteMember(inviteEmail);
-                setInviteMsg(err || "Invite sent!");
-                if (!err) setInviteEmail("");
-              }}>Invite</button>
-            </div>
-            {inviteMsg && (
-              <p style={{ margin: "6px 0 0", fontSize: 13, color: inviteMsg === "Invite sent!" ? "var(--ok)" : "var(--danger)" }}>
-                {inviteMsg}
-              </p>
-            )}
-            <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--muted)" }}>
-              They sign in with that Google account and join automatically.
-            </p>
-          </div>
+          <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--muted)" }}>
+            To add or remove members, edit families.yaml and run ./run.sh --firebase.
+          </p>
         </div>
 
         <div className="card">

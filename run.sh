@@ -35,6 +35,8 @@ fi
 
 case "$MODE" in
   firebase)
+    echo "==> Generating families bundle from families.yaml..."
+    node scripts/gen-families.js
     echo "==> Building production bundle..."
     npm run build
     echo "==> Checking Firebase login..."

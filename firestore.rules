@@ -2,38 +2,30 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // A user is a member if their email is listed in the group's members array.
     function isMember(groupId) {
       return request.auth != null &&
-        exists(/databases/$(database)/documents/groups/$(groupId)/parents/$(request.auth.uid));
-    }
-
-    // User profiles: stores groupId so the same account syncs across devices.
-    match /userProfiles/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
-
-    // Invites: a member writes an invite for an email; that email owner reads/deletes it.
-    match /invites/{email} {
-      allow read, delete: if request.auth != null &&
         request.auth.token.email != null &&
-        request.auth.token.email.lower() == email;
-      allow create: if request.auth != null;
+        request.auth.token.email.lower() in
+          get(/databases/$(database)/documents/groups/$(groupId)).data.members;
     }
 
-    // Group root: any auth user can create (first-time setup); members can update.
+    // Group root: any auth user can create (first member seeds the doc);
+    // reads and updates require membership.
     match /groups/{groupId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if isMember(groupId);
+      allow create: if request.auth != null &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() in request.resource.data.members;
+      allow read, update: if isMember(groupId);
     }
 
-    // Parents: any auth user can write their OWN record (join via invite).
+    // Parents: member can write their own record.
     match /groups/{groupId}/parents/{parentId} {
       allow read: if isMember(groupId);
-      allow write: if request.auth != null && request.auth.uid == parentId;
+      allow write: if isMember(groupId) && request.auth.uid == parentId;
     }
 
-    // All other data: members only.
+    // All other sub-collections: members only.
     match /groups/{groupId}/{sub}/{docId} {
       allow read, write: if isMember(groupId);
     }

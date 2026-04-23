@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useApp } from "@/state/AppContext";
 
 export function OpenFileScreen() {
-  const { signInWithGoogle } = useApp();
+  const { signInWithGoogle, authError } = useApp();
   const [error, setError] = useState("");
 
   return (
@@ -21,7 +21,9 @@ export function OpenFileScreen() {
         >
           Sign in with Google
         </button>
-        {error && <p style={{ margin: "8px 0 0", color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        {(authError || error) && (
+          <p style={{ margin: "8px 0 0", color: "var(--danger)", fontSize: 13 }}>{authError || error}</p>
+        )}
       </div>
     </div>
   );
