@@ -19,118 +19,7 @@ export interface AppData {
   assignments: RideAssignment[];
 }
 
-// ─── File handle persistence (raw IndexedDB, no Dexie) ──────────────────────
-const FH_DB = "idrive-handles";
-const FH_STORE = "handles";
-const FD_STORE = "filedata"; // iOS fallback: stores raw XLSX bytes
-const FH_KEY = "main";
-
-function openHandleDb(): Promise<IDBDatabase> {
-  return new Promise((res, rej) => {
-    const req = indexedDB.open(FH_DB, 2);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(FH_STORE)) db.createObjectStore(FH_STORE);
-      if (!db.objectStoreNames.contains(FD_STORE)) db.createObjectStore(FD_STORE);
-    };
-    req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
-  });
-}
-
-export function isFSASupported(): boolean {
-  return "showOpenFilePicker" in window;
-}
-
-export function isFSASaveSupported(): boolean {
-  return "showSaveFilePicker" in window;
-}
-
-export async function saveDataToIDB(data: AppData): Promise<void> {
-  const raw = XLSX.write(buildWorkbook(data), { type: "array", bookType: "xlsx" }) as Uint8Array;
-  const copied = new Uint8Array(raw).buffer as ArrayBuffer;
-  const db = await openHandleDb();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(FD_STORE, "readwrite");
-    tx.objectStore(FD_STORE).put(copied, FH_KEY);
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-}
-
-export async function loadDataFromIDB(): Promise<AppData | null> {
-  try {
-    const db = await openHandleDb();
-    const buf: ArrayBuffer | undefined = await new Promise((res, rej) => {
-      const tx = db.transaction(FD_STORE, "readonly");
-      const req = tx.objectStore(FD_STORE).get(FH_KEY);
-      req.onsuccess = () => res(req.result as ArrayBuffer | undefined);
-      req.onerror = () => rej(req.error);
-    });
-    if (!buf) return null;
-    return parseWorkbook(XLSX.read(new Uint8Array(buf), { type: "array" }));
-  } catch { return null; }
-}
-
-export async function clearDataFromIDB(): Promise<void> {
-  try {
-    const db = await openHandleDb();
-    return new Promise((res, rej) => {
-      const tx = db.transaction(FD_STORE, "readwrite");
-      tx.objectStore(FD_STORE).delete(FH_KEY);
-      tx.oncomplete = () => res();
-      tx.onerror = () => rej(tx.error);
-    });
-  } catch { /* ignore */ }
-}
-
-export async function openFileFromBuffer(buf: ArrayBuffer): Promise<AppData> {
-  return parseWorkbook(XLSX.read(new Uint8Array(buf), { type: "array" }));
-}
-
-export function buildWorkbookBlob(data: AppData): Blob {
-  const raw = XLSX.write(buildWorkbook(data), { type: "array", bookType: "xlsx" }) as Uint8Array;
-  const copied = new Uint8Array(raw).buffer as ArrayBuffer;
-  return new Blob([copied], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-}
-
-export async function loadSavedHandle(): Promise<FileSystemFileHandle | null> {
-  try {
-    const db = await openHandleDb();
-    return new Promise((res, rej) => {
-      const tx = db.transaction(FH_STORE, "readonly");
-      const req = tx.objectStore(FH_STORE).get(FH_KEY);
-      req.onsuccess = () => res((req.result as FileSystemFileHandle) ?? null);
-      req.onerror = () => rej(req.error);
-    });
-  } catch {
-    return null;
-  }
-}
-
-export async function persistHandle(handle: FileSystemFileHandle): Promise<void> {
-  const db = await openHandleDb();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(FH_STORE, "readwrite");
-    tx.objectStore(FH_STORE).put(handle, FH_KEY);
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-}
-
-export async function clearSavedHandle(): Promise<void> {
-  try {
-    const db = await openHandleDb();
-    return new Promise((res, rej) => {
-      const tx = db.transaction(FH_STORE, "readwrite");
-      tx.objectStore(FH_STORE).delete(FH_KEY);
-      tx.oncomplete = () => res();
-      tx.onerror = () => rej(tx.error);
-    });
-  } catch { /* ignore */ }
-}
-
-// ─── Monthly tab naming (e.g. "Apr 26") ─────────────────────────────────────
+// ─── Monthly tab naming ───────────────────────────────────────────────────────
 export function monthTabName(timestamp: number): string {
   const d = new Date(timestamp);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -138,7 +27,7 @@ export function monthTabName(timestamp: number): string {
   return `${mm}${yy}`;
 }
 
-// ─── Config tab ──────────────────────────────────────────────────────────────
+// ─── Config tab ───────────────────────────────────────────────────────────────
 const CONFIG_KEYS: (keyof AppLocalConfig)[] = [
   "loginName", "loginEmail", "activeParentId", "themeMode", "language", "defaultLandingScreen",
   "showCompletedRidesByDefault", "compactCardMode", "vibrateOnReminder",
@@ -149,9 +38,7 @@ const CONFIG_KEYS: (keyof AppLocalConfig)[] = [
 function buildConfigSheet(config: AppLocalConfig, parents: StoredParent[], children: Child[]): XLSX.WorkSheet {
   const rows: (string | number | boolean | null)[][] = [
     ...CONFIG_KEYS.map((k) => {
-      if (k === "globalActivities") {
-        return [k as string, JSON.stringify(config.globalActivities)];
-      }
+      if (k === "globalActivities") return [k as string, JSON.stringify(config.globalActivities)];
       const v = config[k];
       return [k as string, Array.isArray(v) ? v.join("|") : String(v)];
     }),
@@ -227,17 +114,10 @@ function parseConfigSheet(ws: XLSX.WorkSheet): { config: AppLocalConfig; parents
     syncIntervalMinutes: kv.syncIntervalMinutes !== undefined ? parseInt(kv.syncIntervalMinutes) || 0 : d.syncIntervalMinutes,
   };
 
-  // Migrate old single-user files: if no parents section but loginName is set, create a virtual parent
-  if (parents.length === 0 && config.loginName) {
-    const migratedId = config.loginEmail || `p-${config.loginName.toLowerCase().replace(/\s+/g, "-")}`;
-    parents.push({ parentId: migratedId, displayName: config.loginName });
-    config.activeParentId = migratedId;
-  }
-
   return { config, parents, children };
 }
 
-// ─── Monthly tab ─────────────────────────────────────────────────────────────
+// ─── Monthly tab ──────────────────────────────────────────────────────────────
 const EVENT_HDR = ["eventId","childId","title","type","startDateTime","endDateTime",
   "locationName","needsRide","rideDirection","status","isRecurring","recurrenceRule","visibilityScope","createdAt","updatedAt"];
 const ASSIGN_HDR = ["assignmentId","eventId","driverParentId","driverName","rideLeg","status","notes","claimedAt","completedAt","updatedAt"];
@@ -319,12 +199,11 @@ function parseMonthSheet(ws: XLSX.WorkSheet): { events: Event[]; assignments: Ri
   return { events, assignments };
 }
 
-// ─── Workbook build / parse ──────────────────────────────────────────────────
+// ─── Workbook build / parse ───────────────────────────────────────────────────
 function buildWorkbook(data: AppData): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, buildConfigSheet(data.config, data.parents, data.children), "Config");
 
-  // Group by month tab
   const byTab = new Map<string, { events: Event[]; assignments: RideAssignment[] }>();
   const getTab = (tab: string) => {
     if (!byTab.has(tab)) byTab.set(tab, { events: [], assignments: [] });
@@ -336,11 +215,11 @@ function buildWorkbook(data: AppData): XLSX.WorkBook {
     getTab(monthTabName(evt?.startDateTime ?? Date.now())).assignments.push(a);
   }
 
-  // Sort tabs chronologically
   const sorted = [...byTab.keys()].sort((a, b) => {
     const toMs = (s: string) => {
-      const [mon, yr] = s.split(" ");
-      return new Date(`${mon} 20${yr} 01`).getTime();
+      const mm = s.slice(0, 2);
+      const yy = s.slice(2);
+      return new Date(`20${yy}-${mm}-01`).getTime();
     };
     return toMs(a) - toMs(b);
   });
@@ -368,51 +247,13 @@ function parseWorkbook(wb: XLSX.WorkBook): AppData {
   return { config, parents, children, events, assignments };
 }
 
-// ─── Public API ──────────────────────────────────────────────────────────────
-export async function readFromHandle(handle: FileSystemFileHandle): Promise<AppData> {
-  const file = await handle.getFile();
-  const buf = await file.arrayBuffer();
-  return parseWorkbook(XLSX.read(buf, { type: "array" }));
-}
-
-export async function writeToHandle(handle: FileSystemFileHandle, data: AppData): Promise<void> {
+// ─── Public API ───────────────────────────────────────────────────────────────
+export function buildWorkbookBlob(data: AppData): Blob {
   const raw = XLSX.write(buildWorkbook(data), { type: "array", bookType: "xlsx" }) as Uint8Array;
   const copied = new Uint8Array(raw).buffer as ArrayBuffer;
-  const blob = new Blob([copied], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const writable = await handle.createWritable();
-  await writable.write(blob);
-  await writable.close();
+  return new Blob([copied], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
-export async function openExistingFile(): Promise<{ handle: FileSystemFileHandle; data: AppData }> {
-  const [handle] = await showOpenFilePicker({
-    types: [{ description: "iDrive file", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
-    multiple: false,
-  });
-  const data = await readFromHandle(handle);
-  await persistHandle(handle);
-  return { handle, data };
-}
-
-export async function createNewFile(data: AppData): Promise<{ handle: FileSystemFileHandle; data: AppData }> {
-  const handle = await showSaveFilePicker({
-    suggestedName: "idrive.xlsx",
-    types: [{ description: "iDrive file", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
-  });
-  await writeToHandle(handle, data);
-  await persistHandle(handle);
-  return { handle, data };
-}
-
-export async function tryReopenSavedFile(): Promise<{ handle: FileSystemFileHandle; data: AppData } | null> {
-  const handle = await loadSavedHandle();
-  if (!handle) return null;
-  try {
-    const perm = await handle.queryPermission({ mode: "readwrite" });
-    if (perm !== "granted") return null;
-    const data = await readFromHandle(handle);
-    return { handle, data };
-  } catch {
-    return null;
-  }
+export function parseWorkbookFromBuffer(buf: ArrayBuffer): AppData {
+  return parseWorkbook(XLSX.read(new Uint8Array(buf), { type: "array" }));
 }

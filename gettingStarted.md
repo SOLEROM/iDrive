@@ -10,10 +10,11 @@ app, skip to §1 → §3.
 
 ## 0. What you'll need
 
-- **Node.js 20+** and **npm 10+** (we're on Node 22 in CI)
+- **Node.js 20+** and **npm 10+**
 - ~300 MB free disk (`node_modules/`)
 - A modern browser (Chrome 90+, Edge 90+, Safari 16+, Firefox 110+) with
   Service Worker support — this is a PWA
+- A **Firebase project** with Firestore + Auth enabled (see §4)
 
 macOS, Linux, and Windows (via WSL2) all work. The `install.sh` script
 targets Ubuntu.
@@ -40,62 +41,117 @@ npm install
 
 ---
 
-## 2. Run the app
+## 2. Configure Firebase
 
-The repo ships a `run.sh` helper with three modes:
+Create a `.env.local` file in the project root with your Firebase project
+config (get these from Firebase Console → Project Settings → Your apps):
 
-```bash
-./run.sh              # (default) DEV: HTTPS Vite dev server on :5173, HMR on
-./run.sh --prod       # PROD: build + HTTPS preview of dist/ on :4173 (SW + manifest)
-./run.sh --cloud      # CLOUD: build + Cloudflare quick tunnel — public HTTPS URL
-./run.sh --help       # usage
+```
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your-project-id
+VITE_FIREBASE_STORAGE_BUCKET=your-project.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=...
+VITE_FIREBASE_APP_ID=...
 ```
 
-Equivalent npm scripts if you prefer:
-
-```bash
-npm run dev           # plain HTTP dev on :5173 (no SW)
-npm run dev:https     # HTTPS dev on :5173
-npm run preview       # HTTP preview of built dist/ on :4173
-npm run preview:https # HTTPS preview of built dist/ on :4173
-```
-
-On first visit you'll see the sign-in screen; this build uses a local
-mock (no real OAuth yet), so enter any name + email and continue.
-
-### Test on a phone — three paths, ranked by ease
-
-1. **`./run.sh --cloud`** — the only path that reliably shows Chrome's
-   **"Install app"** option. Cloudflare gives you a real HTTPS URL with a
-   trusted cert. Works on any network (phone doesn't need to be on your
-   Wi-Fi). No setup on the phone. Script stays alive with a 5-second
-   health-check loop; Ctrl+C tears down tunnel + preview.
-2. **`./run.sh --prod`** then open `https://<your-LAN-IP>:4173` on the
-   phone. Self-signed cert — Chrome marks the origin as untrusted, which
-   silently suppresses the install prompt. You can still use the app and
-   *"Add to Home screen"*, but not a proper PWA install. Works offline
-   once loaded.
-3. **`adb reverse tcp:4173 tcp:4173`** then open `http://localhost:4173`
-   on a USB-connected phone. Chrome trusts `localhost` for install
-   purposes, so the prompt appears. Needs USB debugging enabled.
-
-### Regenerating app icons
-
-PNG icons are derived from the SVGs in `public/icons/`. If you edit the
-SVGs, run:
-
-```bash
-npm run icons         # regenerates icon-{192,512,maskable}.png via sharp
-```
+For the existing project (`idrive-8bcdc`) this file already exists on the
+dev machine — do not commit it.
 
 ---
 
-## 3. Test
+## 3. Run the app
+
+```bash
+npm run dev           # http://localhost:5173  (Firebase works on localhost)
+```
+
+The `run.sh` helper has additional modes:
+
+```bash
+./run.sh              # (default) DEV: HTTPS Vite dev server on :5173, HMR on
+./run.sh --prod       # PROD: build + HTTPS preview on :4173 (self-signed cert)
+./run.sh --cloud      # CLOUD: build + Cloudflare quick tunnel — public HTTPS URL
+./run.sh --firebase   # DEPLOY: gen-families → build → Firebase Hosting
+./run.sh --help       # usage
+```
+
+On first visit you'll see the **Sign in with Google** screen. Only email
+addresses listed in `families.yaml` are authorised. Unauthorized accounts
+get an error message and are immediately signed out.
+
+### Test on a phone
+
+**Best option: `./run.sh --firebase`** — deploys to `idrive-8bcdc.web.app`,
+a permanent pre-authorized HTTPS URL. No setup needed on the phone.
+
+Other options:
+
+- **`./run.sh --cloud`** — Cloudflare quick tunnel. Real HTTPS, but the URL
+  changes every run. You'd need to re-authorize it in Firebase Console →
+  Auth → Authorized Domains, which is impractical.
+- **`./run.sh --prod`** then open `https://<LAN-IP>:4173` — self-signed cert,
+  Chrome marks origin untrusted, suppresses PWA install prompt. Auth may fail
+  if the LAN IP isn't in Firebase authorized domains.
+- **`adb reverse tcp:5173 tcp:5173`** then `npm run dev` on `http://localhost:5173`
+  via USB — `localhost` is always authorized.
+
+---
+
+## 4. Firebase project setup (one-time)
+
+If starting from scratch with a new Firebase project:
+
+1. **Firebase Console** → Create project
+2. Enable **Authentication** → Sign-in method → Google
+3. Add authorized domains: `localhost`, your hosting domain
+4. Enable **Firestore Database** → Start in production mode
+5. Deploy Firestore security rules:
+   ```bash
+   npx firebase-tools deploy --only firestore:rules
+   ```
+6. Enable **Firebase Hosting** (optional, but recommended for stable URL):
+   ```bash
+   npx firebase-tools deploy --only hosting
+   ```
+
+---
+
+## 5. Managing family membership
+
+Edit `families.yaml` in the project root:
+
+```yaml
+families:
+  - name: solovs
+    members:
+      - parent1@gmail.com
+      - parent2@gmail.com
+      # add more members below
+```
+
+Then deploy:
+
+```bash
+./run.sh --firebase
+```
+
+This runs `scripts/gen-families.js` to generate `src/familiesData.ts`, builds
+the app, and deploys to Firebase Hosting. The new member list is live
+immediately for all users on next app load.
+
+The `groupId` for each family is derived deterministically from the family
+name (SHA256 hex, first 10 chars). Renaming a family in the yaml creates a
+new empty group — avoid renaming.
+
+---
+
+## 6. Test
 
 ### Unit + integration tests (Vitest)
 
 ```bash
-npm test              # 44 cases, ~2s
+npm test              # 28 cases, ~1s
 npm run test:watch    # watch mode
 ```
 
@@ -106,10 +162,6 @@ Current inventory:
 | `tests/domain/recurrence.test.ts` | 7 |
 | `tests/domain/rideStateMachine.test.ts` | 14 |
 | `tests/domain/conflictDetector.test.ts` | 7 |
-| `tests/config/configParser.test.ts` | 6 |
-| `tests/remote/privateDriveData.test.ts` | 2 |
-| `tests/remote/mockSheetsAdapter.test.ts` | 6 |
-| `tests/services/syncEngine.test.ts` | 2 |
 
 ### Typecheck
 
@@ -125,43 +177,43 @@ npx vitest run --coverage
 
 ---
 
-## 4. Build for production
+## 7. Build for production
 
 ```bash
 npm run build         # → dist/
 ```
 
-Output is a static bundle ready for any CDN or static host. Artefacts:
+Output is a static bundle. Artefacts:
 
 - `dist/index.html` — entry
 - `dist/assets/*.js` / `*.css` — hashed bundles
 - `dist/sw.js` + `dist/workbox-*.js` — Workbox service worker
 - `dist/manifest.webmanifest` — installable PWA manifest
-- `dist/icons/*` — app icons (PNG for Chrome installability, SVG for scalable)
-
-Preview the production build locally:
-
-```bash
-npm run preview       # http://localhost:4173  (HTTP, no cert)
-./run.sh --prod       # https://<LAN-IP>:4173   (HTTPS via self-signed cert)
-./run.sh --cloud      # https://<random>.trycloudflare.com  (HTTPS, trusted cert)
-```
+- `dist/icons/*` — app icons
 
 ---
 
-## 5. Deploy
+## 8. Deploy
 
-The app is a static bundle — any HTTPS host works:
+### Firebase Hosting (recommended)
 
-### Option A — Netlify / Vercel / Cloudflare Pages
+```bash
+./run.sh --firebase
+```
+
+This runs the full pipeline: `gen-families.js` → `vite build` → `firebase-tools deploy`.
+The app is live at `https://idrive-8bcdc.web.app` within ~30 seconds.
+
+### Other static hosts (Netlify / Vercel / Cloudflare Pages)
 
 1. Point the provider at this repo
-2. Build command: `npm run build`
+2. Build command: `node scripts/gen-families.js && npm run build`
 3. Publish directory: `dist`
 4. Node version: **20**
-5. Ensure **HTTPS is enabled** (service workers require it outside `localhost`)
+5. Set all `VITE_FIREBASE_*` env vars in the provider dashboard
+6. Add the hosting domain to Firebase Console → Auth → Authorized Domains
 
-### Option B — Nginx
+### Nginx
 
 ```nginx
 server {
@@ -169,12 +221,10 @@ server {
     server_name kidsrides.example.com;
     root /var/www/kidsrides/dist;
 
-    # PWA: serve index.html for SPA routes
     location / {
         try_files $uri $uri/ /index.html;
     }
 
-    # Service worker must never be cached long-term
     location = /sw.js {
         add_header Cache-Control "no-cache, max-age=0";
     }
@@ -182,7 +232,6 @@ server {
         add_header Cache-Control "no-cache, max-age=0";
     }
 
-    # Hashed assets are safe to cache forever
     location /assets/ {
         expires 1y;
         add_header Cache-Control "public, immutable";
@@ -190,56 +239,38 @@ server {
 }
 ```
 
-### Option C — GitHub Pages / S3 / any static host
-
-`dist/` drops into any static web root. Enable HTTPS; set `index.html` as
-the 404 fallback so client-side routing works.
-
 ---
 
-## 6. Installing the app
-
-### Local testing (before you deploy)
-
-The quickest way to test install on your own phone is
-`./run.sh --cloud` — it starts a Cloudflare quick tunnel so Chrome sees a
-real HTTPS origin with a trusted cert, which unlocks the **"Install app"**
-prompt. Once logged in you'll also see an **Install app** button in
-Settings → About (wired via `beforeinstallprompt`).
+## 9. Installing the app
 
 ### Android (Chrome)
 
-1. Visit the deployed URL (or the tunnel URL from `--cloud`)
+1. Visit the deployed URL
 2. Wait ~5–10s for the service worker to register
-3. Chrome menu (⋮) → **"Install app"** (or use the in-app button in
-   Settings → About)
-4. Launches standalone, no URL bar, shows up in the app drawer
-
-If you only see **"Add to Home screen"** and not **"Install app"**, the
-origin isn't trusted (self-signed cert) — Chrome silently blocks the
-install prompt. Use `./run.sh --cloud` or deploy to a real HTTPS host.
+3. Chrome menu (⋮) → **"Install app"**
+4. Launches standalone, no URL bar
 
 ### iPhone / iPad (Safari)
 
 1. Visit the deployed URL in Safari
 2. Share → *Add to Home Screen*
-3. Confirm — launches standalone from the home-screen icon
+3. Launches standalone from the home-screen icon
 
-Offline support kicks in on the **second** visit (the service worker
-needs one successful load to precache).
+Offline support kicks in on the **second** visit.
 
 ---
 
-## 7. Typical workflows
+## 10. Typical workflows
 
 ### Work on a feature
 
 ```bash
-npm run dev                        # start Vite
+npm run dev                        # start Vite + Firebase
 # edit src/…
 
 npm test                           # Vitest
 npm run typecheck                  # tsc --noEmit
+./run.sh --firebase                # deploy to test on phone
 ```
 
 ### Add a screen
@@ -248,59 +279,26 @@ npm run typecheck                  # tsc --noEmit
 2. Register the route in `src/App.tsx`
 3. Add a link or tab entry in `src/components/TabBar.tsx` if it's top-level
 
-### Debug a sync issue
+### Add a family member
 
-1. Open DevTools → **Application** → **IndexedDB** → `kids-rides` — inspect
-   the `syncQueue` table
-2. Watch console logs; `SyncEngine` emits state transitions
-3. Force a sync: Settings → **Sync now**
+1. Edit `families.yaml` — add the email under the correct family
+2. `./run.sh --firebase`
 
-### Wipe local data
+### Wipe local session data
 
-- **In-app**: Settings → *Sign out (wipes local data)*
+- **In-app**: Settings → *Sign out*
 - **DevTools**: Application → Clear storage → Clear site data
 
 ---
 
-## 8. Real Google Drive / Sheets (deferred)
-
-Debug builds use in-memory mock adapters
-(`src/remote/mock/MockDriveAdapter.ts` / `MockSheetsAdapter.ts`). To add
-real adapters:
-
-1. Create a Google Cloud project → enable **Drive API** + **Sheets API**
-2. Create an **OAuth 2.0 Web credential** with the deploy origin as an
-   authorized redirect URI
-3. Implement `GoogleDriveAdapter` and `GoogleSheetsAdapter` behind the
-   existing `DriveAdapter` / `SheetsAdapter` interfaces
-4. Flip the adapters in `src/state/AppContext.tsx` based on an env flag
-
-The `DriveAdapter` / `SheetsAdapter` interfaces are the only contract to
-respect.
-
----
-
-## 9. Things that will bite you
+## 11. Things that will bite you
 
 | Symptom | Cause |
 |---|---|
-| Service worker doesn't register | Not HTTPS (or not `localhost`). Use `./run.sh --prod` or `./run.sh --cloud`. |
-| "Add to Home screen" appears but not "Install app" | Origin is untrusted (self-signed cert). Use `./run.sh --cloud` for a trusted tunnel URL. |
-| Install prompt never appears on Android | Need a valid manifest + trusted HTTPS + a registered service worker. Check DevTools → Application → Manifest for the failing criterion. |
-| `Blocked request. This host ("…trycloudflare.com") is not allowed` | Vite 5 guards `preview.allowedHosts`. Already set to `true` in `vite.config.ts`; restart the preview after pulling. |
-| Tunnel URL returns "can't connect" | The script has exited — the tunnel dies with it. Keep `./run.sh --cloud` running in its terminal. |
-| iOS shows Safari chrome after "Add to Home Screen" | `apple-mobile-web-app-capable` meta missing — already set in `index.html`; verify it's being served. |
-| `dexie` throws `DatabaseClosedError` in tests | Tests share the Dexie singleton — `__resetDb()` in `tests/setup.ts` clears it between tests. |
-| Old cached bundle stuck after deploy | Service worker auto-updates on next visit, but the *current* tab needs a reload. Hard refresh or close/reopen. |
-| `fake-indexeddb` errors in node | Always `import "fake-indexeddb/auto"` in `tests/setup.ts` (already wired). |
-
----
-
-## 10. Where to go next
-
-- **Dashboard** (`src/screens/DashboardScreen.tsx`) — the landing view
-- **Core contracts** — `src/remote/driveAdapter.ts`,
-  `src/remote/sheetsAdapter.ts`, `src/domain/models.ts`
-- **Executable spec** — `tests/` documents the expected behaviour of every
-  non-trivial piece of domain logic
-- **PWA config** — `vite.config.ts` (manifest + Workbox settings)
+| `auth/unauthorized-domain` | Sign-in domain not in Firebase Console → Auth → Authorized Domains. `localhost` and `idrive-8bcdc.web.app` are pre-listed. |
+| "Your account is not authorised" in-app | Email not in `families.yaml`. Edit yaml and run `./run.sh --firebase`. |
+| Service worker doesn't register | Not HTTPS (or not `localhost`). Use `./run.sh --firebase`. |
+| "Add to Home screen" but not "Install app" | Self-signed cert — use Firebase Hosting for trusted HTTPS. |
+| Cloudflare tunnel URL changes every run | Expected. Use `./run.sh --firebase` for a stable URL. |
+| `familiesData.ts` shows stale members | Run `./run.sh --firebase` to regenerate and deploy. |
+| Old cached bundle stuck after deploy | Service worker auto-updates on next visit; hard refresh or reopen tab. |

@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // A user is a member if their email is listed in the group's members array.
+    function isMember(groupId) {
+      return request.auth != null &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() in
+          get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+    }
+
+    // Group root: any auth user can create (first member seeds the doc);
+    // reads and updates require membership.
+    match /groups/{groupId} {
+      allow create: if request.auth != null &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() in request.resource.data.members;
+      allow read, update: if isMember(groupId);
+    }
+
+    // Parents: member can write their own record.
+    match /groups/{groupId}/parents/{parentId} {
+      allow read: if isMember(groupId);
+      allow write: if isMember(groupId) && request.auth.uid == parentId;
+    }
+
+    // All other sub-collections: members only.
+    match /groups/{groupId}/{sub}/{docId} {
+      allow read, write: if isMember(groupId);
+    }
+  }
+}

@@ -1,26 +1,72 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { defaultAppLocalConfig, type AppLocalConfig } from "@/domain/config";
-import type { Child, Event, RideAssignment } from "@/domain/models";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import {
-  openExistingFile, createNewFile, writeToHandle, persistHandle, readFromHandle, loadSavedHandle,
-  tryReopenSavedFile, clearSavedHandle, type AppData,
-  isFSASupported, openFileFromBuffer, saveDataToIDB, loadDataFromIDB, clearDataFromIDB, buildWorkbookBlob,
-  type StoredParent,
-} from "@/storage/xlsxStorage";
+  onAuthStateChanged, signInWithPopup,
+  GoogleAuthProvider, signOut as firebaseSignOut,
+} from "firebase/auth";
+import type { User } from "firebase/auth";
+import {
+  collection, doc, setDoc, onSnapshot, writeBatch,
+} from "firebase/firestore";
+import { auth, db } from "@/firebase";
+import { families } from "@/familiesData";
+import { defaultAppLocalConfig, type AppLocalConfig } from "@/domain/config";
+import type { Activity, Child, Event, RideAssignment } from "@/domain/models";
+import { buildWorkbookBlob, type AppData } from "@/storage/xlsxStorage";
 
+// ── Local (device-only) config ────────────────────────────────────────────────
+type LocalConfig = Omit<AppLocalConfig,
+  "globalLocations" | "globalActivities" | "loginName" | "loginEmail" | "activeParentId" | "syncIntervalMinutes"
+>;
+
+const LOCAL_CONFIG_KEY = "idrive-local-config";
+const GROUP_ID_KEY = "idrive-group-id";
+
+const defaultLocalConfig: LocalConfig = {
+  themeMode: defaultAppLocalConfig.themeMode,
+  language: defaultAppLocalConfig.language,
+  defaultLandingScreen: defaultAppLocalConfig.defaultLandingScreen,
+  showCompletedRidesByDefault: defaultAppLocalConfig.showCompletedRidesByDefault,
+  compactCardMode: defaultAppLocalConfig.compactCardMode,
+  vibrateOnReminder: defaultAppLocalConfig.vibrateOnReminder,
+  soundOnReminder: defaultAppLocalConfig.soundOnReminder,
+  notificationLeadTimeMinutesDefault: defaultAppLocalConfig.notificationLeadTimeMinutesDefault,
+  debugLoggingEnabled: defaultAppLocalConfig.debugLoggingEnabled,
+};
+
+function loadLocalConfig(): LocalConfig {
+  try {
+    const raw = localStorage.getItem(LOCAL_CONFIG_KEY);
+    if (raw) return { ...defaultLocalConfig, ...(JSON.parse(raw) as Partial<LocalConfig>) };
+  } catch { /* ignore */ }
+  return defaultLocalConfig;
+}
+
+interface SharedConfig {
+  globalLocations: string[];
+  globalActivities: Activity[];
+}
+
+// ── Firestore path helpers ────────────────────────────────────────────────────
+const groupDoc = (gid: string) => doc(db, "groups", gid);
+const subCol = (gid: string, sub: string) => collection(db, "groups", gid, sub);
+const subDoc = (gid: string, sub: string, id: string) => doc(db, "groups", gid, sub, id);
+
+function findFamily(email: string) {
+  return families.find((f) => f.members.includes(email.toLowerCase().trim()));
+}
+
+// ── Context interface ─────────────────────────────────────────────────────────
 export interface AppParent {
   parentId: string;
   displayName: string;
+  email?: string;
 }
 
 interface AppContextValue {
   isLoading: boolean;
-  fileLoaded: boolean;
-  fileError: string | null;
-  fileHandle: FileSystemFileHandle | null;
-  isSyncing: boolean;
-  syncNeeded: boolean;
-  lastSyncAt: number | null;
+  authUser: User | null;
+  authError: string | null;
+  groupId: string | null;
 
   parent: AppParent | null;
   parents: AppParent[];
@@ -29,18 +75,10 @@ interface AppContextValue {
   events: Event[];
   assignments: RideAssignment[];
 
-  sync(): Promise<void>;
-  syncFromBuffer(buf: ArrayBuffer): Promise<void>;
-  openFile(): Promise<void>;
-  openFileFromBuffer(buf: ArrayBuffer): Promise<void>;
-  createFile(): Promise<void>;
-  closeFile(): Promise<void>;
+  signInWithGoogle(): Promise<void>;
+  signOut(): Promise<void>;
+
   downloadFile(): void;
-
-  addParentAndSwitch(name: string): Promise<void>;
-  switchParent(parentId: string): Promise<void>;
-  logOut(): Promise<void>;
-
   setConfig(next: Partial<AppLocalConfig>): Promise<void>;
   upsertChild(child: Child): Promise<void>;
   upsertEvent(event: Event): Promise<void>;
@@ -52,365 +90,240 @@ interface AppContextValue {
 
 const Ctx = createContext<AppContextValue | null>(null);
 
-function makeEmptyData(): AppData {
-  return { config: defaultAppLocalConfig, parents: [], children: [], events: [], assignments: [] };
-}
-
-function mergeData(local: AppData, remote: AppData): AppData {
-  const parentMap = new Map<string, StoredParent>();
-  for (const p of [...remote.parents, ...local.parents]) parentMap.set(p.parentId, p);
-
-  const childMap = new Map<string, Child>();
-  for (const c of [...remote.children, ...local.children]) {
-    const ex = childMap.get(c.childId);
-    if (!ex || c.updatedAt > ex.updatedAt) childMap.set(c.childId, c);
-  }
-
-  const eventMap = new Map<string, Event>();
-  for (const e of [...remote.events, ...local.events]) {
-    const ex = eventMap.get(e.eventId);
-    if (!ex || e.updatedAt > ex.updatedAt) eventMap.set(e.eventId, e);
-  }
-
-  const assignMap = new Map<string, RideAssignment>();
-  for (const a of [...remote.assignments, ...local.assignments]) {
-    const ex = assignMap.get(a.assignmentId);
-    if (!ex || a.updatedAt > ex.updatedAt) assignMap.set(a.assignmentId, a);
-  }
-
-  return {
-    config: local.config, // local config wins (device-specific settings)
-    parents: [...parentMap.values()],
-    children: [...childMap.values()],
-    events: [...eventMap.values()],
-    assignments: [...assignMap.values()],
-  };
-}
-
+// ── Provider ──────────────────────────────────────────────────────────────────
 export function AppProvider({ children: reactChildren }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
-  const [fileLoaded, setFileLoaded] = useState(false);
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncNeeded, setSyncNeeded] = useState(false);
-  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
-  const [data, setData] = useState<AppData>(makeEmptyData());
-  const dataRef = useRef(data);
-  dataRef.current = data;
-  const fileHandleRef = useRef(fileHandle);
-  fileHandleRef.current = fileHandle;
-  const isSyncingRef = useRef(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const [parents, setParents] = useState<AppParent[]>([]);
+  const [children, setChildren] = useState<Child[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
+  const [assignments, setAssignments] = useState<RideAssignment[]>([]);
+  const [sharedConfig, setSharedConfig] = useState<SharedConfig>({ globalLocations: [], globalActivities: [] });
+  const [localConfig, setLocalConfigState] = useState<LocalConfig>(loadLocalConfig);
 
+  // ── Auth + group lookup ───────────────────────────────────────────────────
   useEffect(() => {
-    (async () => {
+    return onAuthStateChanged(auth, async (user) => {
+      setAuthUser(user);
+      setAuthError(null);
+
+      if (!user) {
+        setGroupId(null);
+        setParents([]);
+        setChildren([]);
+        setEvents([]);
+        setAssignments([]);
+        setSharedConfig({ globalLocations: [], globalActivities: [] });
+        setIsLoading(false);
+        return;
+      }
+
+      // Fast path: already resolved on this device
+      const cached = localStorage.getItem(`${GROUP_ID_KEY}-${user.uid}`);
+      if (cached) {
+        setGroupId(cached);
+        setIsLoading(false);
+        return;
+      }
+
+      // Check families bundle (embedded at build time from families.yaml)
+      const family = user.email ? findFamily(user.email) : null;
+      if (!family) {
+        await firebaseSignOut(auth);
+        setAuthError("Your account is not authorised. Contact your group admin.");
+        setIsLoading(false);
+        return;
+      }
+
       try {
-        if (isFSASupported()) {
-          try {
-            const result = await tryReopenSavedFile();
-            if (result) {
-              dataRef.current = result.data;
-              setFileHandle(result.handle);
-              setData(result.data);
-              setFileLoaded(true);
-              return;
-            }
-          } catch { /* permission expired or FSA error — fall through to IDB */ }
-        }
-        // Always try IDB: covers iOS, Android, and FSA permission-expiry after refresh
-        const saved = await loadDataFromIDB();
-        if (saved) {
-          dataRef.current = saved;
-          setData(saved);
-          setFileLoaded(true);
-        }
-      } catch { /* no saved data — show open screen */ }
-      finally { setIsLoading(false); }
-    })();
+        // Ensure group root doc exists (first member creates it; merge = safe for rest)
+        const displayName = user.displayName?.trim() || user.email!.split("@")[0];
+        await setDoc(groupDoc(family.groupId), {
+          groupName: family.name,
+          members: family.members,
+          globalLocations: [],
+          globalActivities: [],
+        }, { merge: true });
+
+        // Register in parents collection
+        await setDoc(subDoc(family.groupId, "parents", user.uid), { displayName, email: user.email ?? "" }, { merge: true });
+
+        localStorage.setItem(`${GROUP_ID_KEY}-${user.uid}`, family.groupId);
+        setGroupId(family.groupId);
+      } catch {
+        setAuthError("Sign-in failed. Try again.");
+      }
+      setIsLoading(false);
+    });
   }, []);
 
-  const save = async (handle: FileSystemFileHandle | null, next: AppData) => {
-    dataRef.current = next;
-    setData(next);
-    if (handle) await writeToHandle(handle, next);
-    await saveDataToIDB(next); // always cache in IDB so refresh restores session
-  };
-
-  // Stable sync function — reads from refs to avoid stale closures
-  const sync = useCallback(async () => {
-    if (isSyncingRef.current) return;
-
-    let handle = fileHandleRef.current;
-
-    // If the live handle was lost (permission expired after refresh), try to regain it.
-    // requestPermission requires a user gesture — clicking Sync satisfies that.
-    if (!handle && isFSASupported()) {
-      try {
-        const saved = await loadSavedHandle();
-        if (saved) {
-          const perm = await saved.requestPermission({ mode: "readwrite" });
-          if (perm === "granted") {
-            handle = saved;
-            setFileHandle(saved);
-            fileHandleRef.current = saved;
-          }
-        }
-      } catch { return; }
-      if (!handle) return;
-    }
-
-    if (!handle) return;
-    isSyncingRef.current = true;
-    setIsSyncing(true);
-    try {
-      const remote = await readFromHandle(handle);
-      const merged = mergeData(dataRef.current, remote);
-      await writeToHandle(handle, merged);
-      await saveDataToIDB(merged);
-      dataRef.current = merged;
-      setData(merged);
-      setLastSyncAt(Date.now());
-    } catch { /* silent — file may be locked by Dropbox */ }
-    finally {
-      isSyncingRef.current = false;
-      setIsSyncing(false);
-    }
-  }, []);
-
-  // Auto-sync timer — FSA: calls sync(); iOS/IDB: sets syncNeeded badge
+  // ── Firestore listeners ───────────────────────────────────────────────────
   useEffect(() => {
-    const minutes = data.config.syncIntervalMinutes;
-    if (!minutes || !fileLoaded) return;
-    const id = setInterval(() => {
-      if (fileHandleRef.current) {
-        sync();
-      } else {
-        setSyncNeeded(true); // can't auto-pick file on iOS — show badge instead
-      }
-    }, minutes * 60_000);
-    return () => clearInterval(id);
-  }, [fileHandle, fileLoaded, data.config.syncIntervalMinutes, sync]);
+    if (!groupId) return;
+    const unsubs: (() => void)[] = [];
 
-  // iOS sync: read file from user-picked buffer, merge into IDB
-  const syncFromBuffer = useCallback(async (buf: ArrayBuffer) => {
-    if (isSyncingRef.current) return;
-    isSyncingRef.current = true;
-    setIsSyncing(true);
-    setSyncNeeded(false);
-    try {
-      const remote = await openFileFromBuffer(buf);
-      const merged = mergeData(dataRef.current, remote);
-      await saveDataToIDB(merged);
-      dataRef.current = merged;
-      setData(merged);
-      setLastSyncAt(Date.now());
-    } catch { /* ignore bad file */ }
-    finally {
-      isSyncingRef.current = false;
-      setIsSyncing(false);
-    }
-  }, []);
-
-  const openFile = async () => {
-    setFileError(null);
-    try {
-      const result = await openExistingFile();
-      dataRef.current = result.data;
-      setFileHandle(result.handle);
-      setData(result.data);
-      setFileLoaded(true);
-    } catch (e) {
-      if ((e as DOMException).name !== "AbortError") {
-        setFileError("Could not open file. Is it a valid idrive.xlsx?");
+    unsubs.push(onSnapshot(groupDoc(groupId), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setSharedConfig({
+          globalLocations: (d.globalLocations as string[]) ?? [],
+          globalActivities: (d.globalActivities as Activity[]) ?? [],
+        });
       }
-    }
+    }));
+
+    unsubs.push(onSnapshot(subCol(groupId, "parents"), (snap) => {
+      setParents(snap.docs.map((d) => ({
+        parentId: d.id,
+        displayName: String(d.data().displayName ?? ""),
+        email: String(d.data().email ?? ""),
+      })));
+    }));
+
+    unsubs.push(onSnapshot(subCol(groupId, "children"), (snap) => {
+      setChildren(snap.docs.map((d) => d.data() as Child));
+    }));
+
+    unsubs.push(onSnapshot(subCol(groupId, "events"), (snap) => {
+      setEvents(snap.docs.map((d) => d.data() as Event));
+    }));
+
+    unsubs.push(onSnapshot(subCol(groupId, "assignments"), (snap) => {
+      setAssignments(snap.docs.map((d) => d.data() as RideAssignment));
+    }));
+
+    return () => unsubs.forEach((u) => u());
+  }, [groupId]);
+
+  // ── Derived ───────────────────────────────────────────────────────────────
+  const parent: AppParent | null = authUser
+    ? (parents.find((p) => p.parentId === authUser.uid) ?? null)
+    : null;
+
+  const config: AppLocalConfig = {
+    ...defaultAppLocalConfig,
+    ...localConfig,
+    globalLocations: sharedConfig.globalLocations,
+    globalActivities: sharedConfig.globalActivities,
+    loginName: parent?.displayName ?? "",
+    loginEmail: authUser?.email ?? "",
+    activeParentId: authUser?.uid ?? "",
+    syncIntervalMinutes: 0,
   };
 
-  const openFileFromBufferFn = async (buf: ArrayBuffer) => {
-    setFileError(null);
-    try {
-      const loaded = await openFileFromBuffer(buf);
-      await saveDataToIDB(loaded);
-      dataRef.current = loaded;
-      setFileHandle(null);
-      setData(loaded);
-      setFileLoaded(true);
-    } catch {
-      setFileError("Could not open file. Is it a valid idrive.xlsx?");
-    }
+  // ── Auth actions ──────────────────────────────────────────────────────────
+  const signInWithGoogle = async () => {
+    setAuthError(null);
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
   };
 
-  const createFile = async () => {
-    setFileError(null);
-    const emptyData: AppData = { config: defaultAppLocalConfig, parents: [], children: [], events: [], assignments: [] };
-
-    if ("showSaveFilePicker" in window) {
-      try {
-        const result = await createNewFile(emptyData);
-        dataRef.current = result.data;
-        setFileHandle(result.handle);
-        setData(result.data);
-        setFileLoaded(true);
-      } catch (e) {
-        if ((e as DOMException).name !== "AbortError") setFileError("Could not create file.");
-      }
-      return;
-    }
-
-    if ("showDirectoryPicker" in window) {
-      try {
-        const dir = await showDirectoryPicker({ mode: "readwrite" });
-        const handle = await dir.getFileHandle("idrive.xlsx", { create: true });
-        await writeToHandle(handle, emptyData);
-        await persistHandle(handle);
-        dataRef.current = emptyData;
-        setFileHandle(handle);
-        setData(emptyData);
-        setFileLoaded(true);
-      } catch (e) {
-        if ((e as DOMException).name !== "AbortError") setFileError("Could not create file.");
-      }
-      return;
-    }
-
-    // Android / iOS — no file picker available, store in IDB
-    try {
-      await saveDataToIDB(emptyData);
-      dataRef.current = emptyData;
-      setData(emptyData);
-      setFileLoaded(true);
-    } catch {
-      setFileError("Could not create file.");
-    }
+  const signOut = async () => {
+    if (authUser) localStorage.removeItem(`${GROUP_ID_KEY}-${authUser.uid}`);
+    await firebaseSignOut(auth);
   };
 
-  const closeFile = async () => {
-    await clearSavedHandle();
-    await clearDataFromIDB();
-    const empty = makeEmptyData();
-    dataRef.current = empty;
-    setFileHandle(null);
-    setData(empty);
-    setFileLoaded(false);
-    setLastSyncAt(null);
-  };
-
-  const downloadFile = () => {
-    const blob = buildWorkbookBlob(dataRef.current);
+  // ── Data mutations ────────────────────────────────────────────────────────
+  const downloadFile = useCallback(() => {
+    const data: AppData = { config, parents, children, events, assignments };
+    const blob = buildWorkbookBlob(data);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "idrive.xlsx";
-    a.click();
+    a.href = url; a.download = "idrive.xlsx"; a.click();
     URL.revokeObjectURL(url);
-  };
+  }, [config, parents, children, events, assignments]);
 
-  const addParentAndSwitch = async (name: string) => {
-    if (!fileHandle && isFSASupported()) return;
-    const parentId = `p-${Math.random().toString(36).slice(2, 10)}`;
-    const d = dataRef.current;
-    await save(fileHandle, {
-      ...d,
-      parents: [...d.parents, { parentId, displayName: name.trim() }],
-      config: { ...d.config, activeParentId: parentId },
-    });
-  };
+  const SHARED_KEYS = new Set(["globalLocations", "globalActivities"]);
 
-  const switchParent = async (parentId: string) => {
-    if (!fileHandle && isFSASupported()) return;
-    const d = dataRef.current;
-    await save(fileHandle, { ...d, config: { ...d.config, activeParentId: parentId } });
-  };
+  const setConfig = useCallback(async (next: Partial<AppLocalConfig>) => {
+    const sharedUpdates: Record<string, unknown> = {};
+    const localUpdates: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(next)) {
+      if (SHARED_KEYS.has(k)) sharedUpdates[k] = v;
+      else localUpdates[k] = v;
+    }
+    if (Object.keys(sharedUpdates).length > 0 && groupId) {
+      await setDoc(groupDoc(groupId), sharedUpdates, { merge: true });
+    }
+    if (Object.keys(localUpdates).length > 0) {
+      const merged = { ...localConfig, ...localUpdates } as LocalConfig;
+      setLocalConfigState(merged);
+      localStorage.setItem(LOCAL_CONFIG_KEY, JSON.stringify(merged));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId, localConfig]);
 
-  const logOut = async () => {
-    if (!fileHandle && isFSASupported()) return;
-    const d = dataRef.current;
-    await save(fileHandle, { ...d, config: { ...d.config, activeParentId: "" } });
-  };
+  const upsertChild = useCallback(async (child: Child) => {
+    if (!groupId) return;
+    await setDoc(subDoc(groupId, "children", child.childId), { ...child, updatedAt: Date.now() });
+  }, [groupId]);
 
-  const setConfig = async (next: Partial<AppLocalConfig>) => {
-    if (!fileHandle && isFSASupported()) return;
-    const d = dataRef.current;
-    await save(fileHandle, { ...d, config: { ...d.config, ...next } });
-  };
-
-  const upsertChild = async (child: Child) => {
-    if (!fileHandle && isFSASupported()) return;
+  const upsertEvent = useCallback(async (event: Event) => {
+    if (!groupId) return;
     const now = Date.now();
-    const updated = { ...child, updatedAt: now };
-    const d = dataRef.current;
-    await save(fileHandle, { ...d, children: [...d.children.filter((c) => c.childId !== child.childId), updated] });
-  };
+    await setDoc(subDoc(groupId, "events", event.eventId), { ...event, updatedAt: now, createdAt: event.createdAt || now });
+  }, [groupId]);
 
-  const upsertEvent = async (event: Event) => {
-    if (!fileHandle && isFSASupported()) return;
+  const upsertEvents = useCallback(async (eventsToUpsert: Event[]) => {
+    if (!groupId || eventsToUpsert.length === 0) return;
     const now = Date.now();
-    const updated = { ...event, updatedAt: now, createdAt: event.createdAt || now };
-    const d = dataRef.current;
-    await save(fileHandle, { ...d, events: [...d.events.filter((e) => e.eventId !== event.eventId), updated] });
-  };
+    const batch = writeBatch(db);
+    for (const event of eventsToUpsert) {
+      batch.set(subDoc(groupId, "events", event.eventId), { ...event, updatedAt: now, createdAt: event.createdAt || now });
+    }
+    await batch.commit();
+  }, [groupId]);
 
-  const upsertEvents = async (eventsToUpsert: Event[]) => {
-    if (!fileHandle && isFSASupported()) return;
-    const now = Date.now();
-    const updatedList = eventsToUpsert.map((e) => ({ ...e, updatedAt: now, createdAt: e.createdAt || now }));
-    const ids = new Set(updatedList.map((e) => e.eventId));
-    const d = dataRef.current;
-    await save(fileHandle, { ...d, events: [...d.events.filter((e) => !ids.has(e.eventId)), ...updatedList] });
-  };
+  const deleteEvent = useCallback(async (eventId: string) => {
+    if (!groupId) return;
+    const batch = writeBatch(db);
+    batch.delete(subDoc(groupId, "events", eventId));
+    for (const a of assignments.filter((a) => a.eventId === eventId)) {
+      batch.delete(subDoc(groupId, "assignments", a.assignmentId));
+    }
+    await batch.commit();
+  }, [groupId, assignments]);
 
-  const deleteEvent = async (eventId: string) => {
-    if (!fileHandle && isFSASupported()) return;
-    const d = dataRef.current;
-    await save(fileHandle, {
-      ...d,
-      events: d.events.filter((e) => e.eventId !== eventId),
-      assignments: d.assignments.filter((a) => a.eventId !== eventId),
-    });
-  };
-
-  const deleteEvents = async (eventIds: string[]) => {
-    if (!fileHandle && isFSASupported()) return;
+  const deleteEvents = useCallback(async (eventIds: string[]) => {
+    if (!groupId || eventIds.length === 0) return;
     const idSet = new Set(eventIds);
-    const d = dataRef.current;
-    await save(fileHandle, {
-      ...d,
-      events: d.events.filter((e) => !idSet.has(e.eventId)),
-      assignments: d.assignments.filter((a) => !idSet.has(a.eventId)),
-    });
-  };
+    const batch = writeBatch(db);
+    for (const id of eventIds) batch.delete(subDoc(groupId, "events", id));
+    for (const a of assignments.filter((a) => idSet.has(a.eventId))) {
+      batch.delete(subDoc(groupId, "assignments", a.assignmentId));
+    }
+    await batch.commit();
+  }, [groupId, assignments]);
 
-  const upsertAssignment = async (assignment: RideAssignment) => {
-    if (!fileHandle && isFSASupported()) return;
-    const now = Date.now();
-    const updated = { ...assignment, updatedAt: now };
-    const d = dataRef.current;
-    await save(fileHandle, {
-      ...d,
-      assignments: [...d.assignments.filter((a) => a.assignmentId !== assignment.assignmentId), updated],
-    });
-  };
-
-  const activeParent: AppParent | null = (() => {
-    const { activeParentId, loginName, loginEmail } = data.config;
-    const fromList = data.parents.find((p) => p.parentId === activeParentId);
-    if (fromList) return fromList;
-    if (loginName) return { parentId: loginEmail || loginName, displayName: loginName };
-    return null;
-  })();
+  const upsertAssignment = useCallback(async (assignment: RideAssignment) => {
+    if (!groupId) return;
+    await setDoc(subDoc(groupId, "assignments", assignment.assignmentId), { ...assignment, updatedAt: Date.now() });
+  }, [groupId]);
 
   return (
     <Ctx.Provider value={{
-      isLoading, fileLoaded, fileError, fileHandle, isSyncing, syncNeeded, lastSyncAt,
-      parent: activeParent,
-      parents: data.parents,
-      config: data.config,
-      children: data.children.filter((c) => !c.isArchived),
-      events: data.events,
-      assignments: data.assignments,
-      sync, syncFromBuffer, openFile, openFileFromBuffer: openFileFromBufferFn, createFile, closeFile, downloadFile,
-      addParentAndSwitch, switchParent, logOut,
-      setConfig, upsertChild, upsertEvent, upsertEvents, deleteEvent, deleteEvents, upsertAssignment,
+      isLoading,
+      authUser,
+      authError,
+      groupId,
+      parent,
+      parents,
+      config,
+      children: children.filter((c) => !c.isArchived),
+      events,
+      assignments,
+      signInWithGoogle,
+      signOut,
+      downloadFile,
+      setConfig,
+      upsertChild,
+      upsertEvent,
+      upsertEvents,
+      deleteEvent,
+      deleteEvents,
+      upsertAssignment,
     }}>
       {reactChildren}
     </Ctx.Provider>
