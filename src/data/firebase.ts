@@ -2,6 +2,19 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { initializeFirestore, persistentLocalCache } from "firebase/firestore";
 
+const required = [
+  "VITE_FIREBASE_API_KEY",
+  "VITE_FIREBASE_AUTH_DOMAIN",
+  "VITE_FIREBASE_PROJECT_ID",
+  "VITE_FIREBASE_APP_ID",
+] as const;
+
+for (const k of required) {
+  if (!import.meta.env[k]) {
+    throw new Error(`Missing env var: ${k}. Copy .env.local.example → .env.local.`);
+  }
+}
+
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,

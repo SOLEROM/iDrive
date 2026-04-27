@@ -4,18 +4,27 @@ import { AssignmentStatus as AS } from "./enums";
 /**
  * State machine for RideAssignment.assignmentStatus.
  *
- *   UNASSIGNED ─claim──▶ VOLUNTEERED ─confirm──▶ CONFIRMED ─complete──▶ COMPLETED
- *        ▲                    │                      │
- *        │                    └──release──▶ UNASSIGNED
- *        │                    └──cancel───▶ CANCELLED
- *   CONFLICT ◀─sync-detects-collision── any of (VOLUNTEERED, CONFIRMED)
+ *   UNASSIGNED ─claim──▶ VOLUNTEERED ─complete──▶ COMPLETED
+ *        ▲                    │                       │
+ *        │                    └─release──▶ UNASSIGNED │
+ *        │                                ◀── undo ───┘
+ *
+ * Claim goes straight to VOLUNTEERED — assigning a ride is the commitment;
+ * there is no separate confirmation step.
+ *
+ * CONFIRMED is kept in the table only so legacy assignments still in
+ * Firestore can be released / completed / undone with the same UI. New
+ * writes never produce a CONFIRMED row.
+ *
+ * COMPLETED is not terminal — an accidental "Done" can be undone back to
+ * VOLUNTEERED.
  */
 const transitions: Record<AssignmentStatus, readonly AssignmentStatus[]> = {
-  [AS.UNASSIGNED]: [AS.VOLUNTEERED, AS.CANCELLED],
-  [AS.VOLUNTEERED]: [AS.CONFIRMED, AS.UNASSIGNED, AS.CANCELLED, AS.CONFLICT],
-  [AS.CONFIRMED]: [AS.COMPLETED, AS.CANCELLED, AS.CONFLICT],
-  [AS.COMPLETED]: [],
-  [AS.CONFLICT]: [AS.VOLUNTEERED, AS.UNASSIGNED, AS.CANCELLED],
+  [AS.UNASSIGNED]: [AS.VOLUNTEERED, AS.CONFIRMED, AS.CANCELLED],
+  [AS.VOLUNTEERED]: [AS.COMPLETED, AS.UNASSIGNED, AS.CANCELLED, AS.CONFLICT, AS.CONFIRMED],
+  [AS.CONFIRMED]: [AS.COMPLETED, AS.UNASSIGNED, AS.CANCELLED, AS.CONFLICT, AS.VOLUNTEERED],
+  [AS.COMPLETED]: [AS.VOLUNTEERED, AS.CONFIRMED],
+  [AS.CONFLICT]: [AS.VOLUNTEERED, AS.CONFIRMED, AS.UNASSIGNED, AS.CANCELLED],
   [AS.CANCELLED]: [AS.UNASSIGNED],
 };
 

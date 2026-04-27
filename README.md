@@ -22,20 +22,45 @@ page in real time.
 - **Family groups** — the app admin manages a `families.yaml` file that maps
   Google accounts to family groups. Only listed email addresses can sign in.
 - **Activities per child** — each child has a list of activities (e.g.
-  "Football", "Piano"). An activity defines the days of week, start/end time,
-  place, and whether it needs ride coordination. Saving an activity
-  automatically generates events for today through the end of the current month.
-- **Events** — auto-generated from activities (or added manually). Each event
-  has a date/time, location, and optional ride request.
-- **Ride volunteering** — any parent can claim a ride leg (**TO**, **FROM**,
-  or **BOTH**). The Rides Board shows what's unclaimed, claimed, confirmed,
-  or done. Filter by child to see that child's colour-tinted view.
-- **Offline-first** — Firestore caches all data locally (IndexedDB). The app
-  works without a network connection; changes sync automatically on reconnect.
+  "Football", "Piano"). An activity defines the days of week and per-day
+  start / end times, place, and ride coordination. Saving an activity
+  generates events for today through the end of next month, and the rolling
+  regenerator on app open keeps the calendar permanently full.
+- **Generate further** — from each child's screen pick any month up to a
+  year ahead and Generate to extend events to that month. Picking the
+  current month switches to **Reset & regenerate**, a confirmed flow that
+  rebuilds from today onward (past events are never touched).
+- **Events** — auto-generated from activities (or added manually). Each
+  event has a date/time, location, child badge (name + colour) and optional
+  ride request. Calendar week + month views with prev/next navigation.
+- **Rides** — any parent can claim a ride leg (**TO**, **FROM**, or both)
+  for themselves, assign it to another family member, or pick **Other…**
+  to record an external (non-member) driver by name. Future-only board,
+  sorted by date, filterable by child. Per-leg actions: Accept, Release,
+  Done, Undo done. Override-confirm prompt before stealing a leg from
+  another parent. External rides render with a red wash on every screen so
+  the family can verify out-of-group coverage at a glance.
+- **Dashboard** — Greeting on the left, today's weekday + date on the
+  right; **My rides** on top (same-day Done button, external rides shown
+  in red and visible to every member); **Upcoming events** (Today / 7 days
+  filter, default Today); week + month open-leg counts.
+- **Calendar Day view** — `/events` opens to a calendar-style timeline
+  for the cursor day: hour gutter, events as colour-coded boxes by child,
+  with title, child name, time range and assigned drivers per leg. Round
+  trips with both legs covered get a green ✓. Today's now-line is shown
+  in red. Week and Month views remain available with prev/next navigation.
+- **Hebrew language** — switch Settings → Language to Hebrew and the day
+  names, dates, calendar headers, mode pills and dashboard chrome flip to
+  Hebrew immediately. Stored data stays in English; only display goes
+  through `t(key, language)` and `Intl.*` with the user's locale.
+- **Offline-first** — Firestore caches all data locally (IndexedDB). The
+  app works without a network connection; changes sync automatically on
+  reconnect.
 - **Installable** — Add to Home Screen on iOS; browser install prompt on
-  Android/Chrome.
-- **Backup** — download a snapshot of all group data as an `.xlsx` file
-  from Settings.
+  Android/Chrome; service-worker update banner ("Reload" / "Later").
+- **Backup + analytics** — from Settings, download a recovery `.xlsx`
+  snapshot OR an analytics-shaped flat workbook (`Events`,
+  `Assignments`, `Activities`, `Summary` sheets) ready for pivots.
 
 ---
 
@@ -51,36 +76,45 @@ page in real time.
 
 ```
 src/
-├── domain/         ← pure TS: enums, models, config — no side effects
-├── storage/
-│   └── xlsxStorage.ts   ← xlsx backup export (SheetJS, write-only)
-├── state/
-│   └── AppContext.tsx    ← React context: Firebase auth, Firestore listeners, all mutations
-├── firebase.ts          ← Firebase app init (Auth + Firestore with offline persistence)
-├── familiesData.ts      ← auto-generated from families.yaml at build time
-├── components/     ← Header, TabBar, ChildDot, RideStatusChip
-├── screens/        ← one file per screen (see screen list below)
-├── pwa/            ← service-worker registration (Workbox)
-├── lib/            ← format helpers, useInstallPrompt
-├── App.tsx         ← router + Shell (guards: loading → sign-in → main app)
-└── main.tsx        ← entry point
+├── domain/        ← pure TS: enums, models, ids, timeWindow,
+│                    activityExpander, rollingWindow, recurrence,
+│                    rideStateMachine, conflictDetector
+├── data/          ← only layer that imports firebase / xlsx
+│                    firebase.ts, paths.ts, familiesBundle.ts,
+│                    {auth,group,parents,children,events,assignments}Repo.ts,
+│                    xlsxExporter.ts (lazy-imported)
+├── state/         ← React glue: AppContext, useAuth, useGroupData,
+│                    useLocalConfig, useTheme, useRollingRegen
+├── components/    ← Header, TabBar, ChildDot, ChildBadge,
+│                    MemberPicker, RideStatusChip, UpdateBanner
+├── screens/       ← one file per screen (see table below)
+├── pwa/           ← service-worker registration (Workbox) + update bus
+├── lib/           ← format helpers, i18n, useInstallPrompt
+├── App.tsx        ← router + Shell + LandingRedirector
+├── styles.css
+├── familiesData.ts (generated)
+└── main.tsx       ← entry point
 ```
+
+Layering rule: **`ui → state → data → domain`**, never the other direction.
+Only `src/data/` imports `firebase/*` or `xlsx`. Domain has zero side effects
+and can run unchanged in a Node test.
 
 ### Screens
 
 | Route | Screen | Purpose |
 |---|---|---|
 | *(not signed in)* | `OpenFileScreen` | Google Sign-In |
-| `/` | `DashboardScreen` | Upcoming events, my rides, open ride requests (week + month) |
+| `/` | `DashboardScreen` | My rides, upcoming events (Today/7d), open-leg counts |
 | `/children` | `ChildrenScreen` | List children; inline add |
-| `/children/:id` | `ChildDetailScreen` | Edit child profile + activities list |
-| `/children/:id/activities/:idx` | `ActivityEditorScreen` | Add/edit activity → generates events |
-| `/events` | `EventsScreen` | All events list |
-| `/events/new` `/events/:id` | `EventEditorScreen` | Add/edit a single event |
-| `/rides` | `RidesBoardScreen` | Claim/unclaim ride legs; filter by child |
-| `/my-rides` | `MyRidesScreen` | My own claimed rides |
-| `/notifications` | `NotificationsScreen` | Notification log |
-| `/settings` | `SettingsScreen` | Theme, language, reminders, locations, members, sign out |
+| `/children/:id` | `ChildDetailScreen` | Profile, activities, generate-ahead / reset-current-month, delete child |
+| `/children/:id/activities/:idx` | `ActivityEditorScreen` | Per-day times; cascades on rename / time change |
+| `/events` | `EventsScreen` | Day (calendar timeline) · Week · Month, prev/next nav |
+| `/events/new` `/events/:id` | `EventEditorScreen` | Add / edit a single event |
+| `/rides` | `RidesBoardScreen` | Today-onward, claim/release/done, member picker |
+| `/my-rides` | `MyRidesScreen` | Driver OR claimer view, allowed transitions |
+| `/notifications` | `NotificationsScreen` | Stub (no push this round) |
+| `/settings` | `SettingsScreen` | Theme, language, reminders, locations, exports, sign out |
 
 ---
 
@@ -104,8 +138,14 @@ That's it. The member list is embedded in the app bundle at build time.
 Only listed email addresses can sign in. Adding a new member = edit yaml + deploy.
 
 Each family gets its own isolated Firestore group (groupId derived
-deterministically from the family name — same name always → same group, across
-deploys).
+deterministically from the family name — same name always → same group,
+across deploys). The Firestore rules let any current member rewrite
+`members[]` only when the writer's own email remains in the new list, so
+a `families.yaml` redeploy refreshes the roster while no individual
+member can blank everyone else out. The Settings → Members card always
+shows the live `families.yaml` roster (with a "not signed in yet" tag
+for new members) so you can verify a deploy without waiting for them to
+authenticate.
 
 ---
 
@@ -118,7 +158,7 @@ Quick start if Node 20+ is installed and Firebase is configured:
 ```bash
 npm install
 npm run dev          # http://localhost:5173  (sign-in works on localhost)
-npm test             # 28 Vitest domain tests
+npm test             # 54 Vitest cases, ~1s
 ./run.sh --firebase  # build + deploy to Firebase Hosting
 ```
 
@@ -132,26 +172,41 @@ npm test             # 28 Vitest domain tests
 **iPhone / iPad (Safari)** — tap Share → *Add to Home Screen*. iOS launches
 it as a standalone app without the Safari chrome.
 
+When a new version is deployed, an in-app banner offers **Reload** / **Later**.
+
 ---
 
 ## Status
 
 | Area | Status |
 |---|---|
-| PWA scaffold + Workbox service worker | ✅ |
+| Layered architecture (`domain · data · state · ui`) | ✅ |
+| PWA scaffold + Workbox service worker (auto-update banner) | ✅ |
 | Install manifest (Android + iOS) | ✅ |
 | Firebase Auth (Google Sign-In) | ✅ |
 | Firestore real-time sync (offline-capable) | ✅ |
+| Hardened Firestore rules (per-status validTransition, members pinned) | ✅ |
 | `families.yaml` membership management | ✅ |
 | Firebase Hosting (`idrive-8bcdc.web.app`) | ✅ |
-| 12 screens (including ActivityEditor) | ✅ |
-| Activity → Event auto-generation (today → end of month) | ✅ |
-| Rides Board with child-colour filter + tint | ✅ |
-| Dashboard: week + month open ride request counts | ✅ |
-| Domain tests (28 Vitest cases) | ✅ |
+| 12 screens, all using ChildBadge (name + colour everywhere) | ✅ |
+| Activity → Event auto-generation + idempotent IDs | ✅ |
+| Rolling regeneration on app open | ✅ |
+| Generate-future-events + current-month Reset & regenerate | ✅ |
+| Delete child with double-confirm cascade | ✅ |
+| Rides Board: future-only, sorted, member picker, override-confirm | ✅ |
+| Ride state: VOLUNTEERED → COMPLETED, Undo done, Done same-day-only | ✅ |
+| External "Other…" driver: assigned to non-member, red on all screens | ✅ |
+| Dashboard: greeting + date in header, My rides on top, Upcoming Today/7d | ✅ |
+| Events: Day (calendar timeline) + Week + Month, prev/next on each | ✅ |
+| Day-view ✓ badge when round-trip event has both legs assigned | ✅ |
+| Hebrew language: dates, weekday/mode chips, dashboard chrome | ✅ |
+| Members roster auto-refreshes after `./run.sh --firebase` | ✅ |
 | xlsx backup download | ✅ |
+| xlsx analytics export (flat sheets for pivots) | ✅ |
+| 54 Vitest cases (domain + data) | ✅ |
+| Conflict-resolution UI | 🚧 |
 | Web Push notifications | ❌ |
-| Hebrew localisation | ❌ |
+| Hebrew localisation (every screen + button) | 🚧 |
 
 ---
 

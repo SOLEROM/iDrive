@@ -6,7 +6,7 @@ import { type AppLocalConfig } from "@/domain/config";
 import { useInstallPrompt } from "@/lib/useInstallPrompt";
 
 export function SettingsScreen() {
-  const { parent, parents, config, setConfig, signOut, downloadFile } = useApp();
+  const { parent, parents, bundleMembers, config, setConfig, signOut, downloadFile, downloadAnalytics } = useApp();
   const { canInstall, install } = useInstallPrompt();
   const isStandalone =
     window.matchMedia("(display-mode: standalone)").matches ||
@@ -42,13 +42,30 @@ export function SettingsScreen() {
 
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Members</h2>
-          {parents.map((p) => (
-            <p key={p.parentId} style={{ margin: "4px 0", fontSize: 14 }}>
-              {p.displayName}{p.parentId === parent?.parentId ? " (you)" : ""}
+          {bundleMembers.length === 0 && (
+            <p style={{ margin: "4px 0", fontSize: 14, color: "var(--muted)" }}>
+              No members in families.yaml.
             </p>
-          ))}
+          )}
+          {bundleMembers.map((email) => {
+            const p = parents.find((x) => (x.email ?? "").toLowerCase() === email);
+            const isMe = !!p && p.parentId === parent?.parentId;
+            const displayName = p?.displayName?.trim() || email.split("@")[0];
+            const signedIn = !!p;
+            return (
+              <p key={email} style={{ margin: "4px 0", fontSize: 14 }}>
+                <strong>{displayName}</strong>
+                {isMe && " (you)"}{" "}
+                <span style={{ color: "var(--muted)", fontSize: 12 }}>
+                  {email}{!signedIn && " · not signed in yet"}
+                </span>
+              </p>
+            );
+          })}
           <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--muted)" }}>
             To add or remove members, edit families.yaml and run ./run.sh --firebase.
+            New members appear here right away; the next time anyone signs in
+            the group's roster on the server is refreshed automatically.
           </p>
         </div>
 
@@ -139,9 +156,21 @@ export function SettingsScreen() {
           )}
         </div>
 
-        <button className="btn btn--full" onClick={downloadFile} style={{ marginTop: 16 }}>
-          Download backup (.xlsx)
-        </button>
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>Export</h2>
+          <button className="btn btn--full" onClick={downloadFile} style={{ marginTop: 4 }}>
+            Download backup (.xlsx)
+          </button>
+          <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>
+            Human-readable archive: config + monthly tabs.
+          </p>
+          <button className="btn btn--ghost btn--full" onClick={downloadAnalytics}>
+            Export for analysis (.xlsx)
+          </button>
+          <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 0" }}>
+            Flat sheets with joined names — open in Excel for pivots.
+          </p>
+        </div>
 
         <button className="btn btn--danger btn--full" onClick={signOut} style={{ marginTop: 8, marginBottom: 24 }}>
           Sign out

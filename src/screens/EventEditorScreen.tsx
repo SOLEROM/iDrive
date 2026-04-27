@@ -4,7 +4,8 @@ import { Link } from "react-router-dom";
 import { Header } from "@/components/Header";
 import type { Event } from "@/domain/models";
 import { newEvent } from "@/domain/models";
-import { RideDirection, VisibilityScope } from "@/domain/enums";
+import { newEventId } from "@/domain/ids";
+import { RideDirection } from "@/domain/enums";
 import { useApp } from "@/state/AppContext";
 import { toLocalInputValue, fromLocalInputValue } from "@/lib/format";
 
@@ -21,7 +22,7 @@ export function EventEditorScreen() {
   const baseEnd   = dateParam ? new Date(dateParam + "T10:00").getTime() : Date.now() + 25 * 60 * 60 * 1000;
   const [event, setEvent] = useState<Event>(
     stored ?? newEvent({
-      eventId: `e-${Math.random().toString(36).slice(2, 10)}`,
+      eventId: newEventId(),
       childId: children[0]?.childId ?? "",
       title: "",
       createdByParentId: parent?.parentId ?? "anon",
@@ -144,13 +145,6 @@ export function EventEditorScreen() {
               </select>
             </label>
           )}
-          <label>Visibility
-            <select className="select" value={event.visibilityScope}
-              onChange={(e) => setEvent({ ...event, visibilityScope: e.target.value as Event["visibilityScope"] })}>
-              {Object.values(VisibilityScope).map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </label>
-
           <button className="btn btn--full" onClick={save} disabled={saving} style={{ marginTop: 16 }}>
             {saving ? "Saving…" : "Save"}
           </button>

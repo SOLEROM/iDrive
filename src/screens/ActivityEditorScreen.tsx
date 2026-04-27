@@ -1,15 +1,12 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Header } from "@/components/Header";
+import { ChildBadge } from "@/components/ChildBadge";
 import { useApp } from "@/state/AppContext";
 import { RideDirection } from "@/domain/enums";
-import { newActivity, newEvent, type Event } from "@/domain/models";
+import { newActivity } from "@/domain/models";
+import { expandActivity, findFutureActivityEventIds } from "@/domain/activityExpander";
 import { getDayOfWeekLabel, getDayOrder } from "@/lib/i18n";
-
-const JS_DOW: Record<number, string> = {
-  0: "SUNDAY", 1: "MONDAY", 2: "TUESDAY", 3: "WEDNESDAY",
-  4: "THURSDAY", 5: "FRIDAY", 6: "SATURDAY",
-};
 
 function directionFromChecks(to: boolean, from: boolean): RideDirection {
   if (to && from) return RideDirection.BOTH;
@@ -44,8 +41,7 @@ export function ActivityEditorScreen() {
     if (existing?.dayTimes && Object.keys(existing.dayTimes).length > 0) {
       return existing.dayTimes;
     }
-    // Migrate old single-time activities
-    if (existing && existing.days.length > 0 && (existing.startTime || existing.endTime)) {
+    if (existing && existing.days?.length > 0 && (existing.startTime || existing.endTime)) {
       const result: Record<string, { startTime: string; endTime: string }> = {};
       for (const d of existing.days) {
         result[d] = { startTime: existing.startTime, endTime: existing.endTime };
@@ -81,59 +77,6 @@ export function ActivityEditorScreen() {
     }));
   };
 
-  const applyTime = (dateMs: number, timeStr: string): number => {
-    if (!timeStr) return dateMs;
-    const d = new Date(dateMs);
-    const [h, m] = timeStr.split(":").map(Number);
-    d.setHours(h, m, 0, 0);
-    return d.getTime();
-  };
-
-  const generateActivityEvents = async (activity: ReturnType<typeof newActivity>) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 2, 0, 23, 59, 59, 999);
-    const slug = activity.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 12);
-    const childSuffix = childId.slice(-6);
-
-    const hasDayTimes = Object.keys(activity.dayTimes).length > 0;
-    const activeDays = hasDayTimes ? Object.keys(activity.dayTimes) : activity.days;
-
-    const toUpsert: Event[] = [];
-    for (let d = new Date(today); d <= endOfMonth; d.setDate(d.getDate() + 1)) {
-      const dow = JS_DOW[d.getDay()];
-      if (activeDays.length > 0 && !activeDays.includes(dow)) continue;
-      const times = hasDayTimes
-        ? (activity.dayTimes[dow] ?? { startTime: "", endTime: "" })
-        : { startTime: activity.startTime, endTime: activity.endTime };
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const dayStart = new Date(d).setHours(0, 0, 0, 0);
-      toUpsert.push(newEvent({
-        eventId: `act-${childSuffix}-${slug}-${dateStr}`,
-        childId,
-        title: activity.name,
-        eventType: activity.name,
-        description: activity.notes,
-        createdByParentId: parent?.parentId ?? "anon",
-        startDateTime: applyTime(dayStart, times.startTime),
-        endDateTime: applyTime(dayStart, times.endTime || times.startTime),
-        locationName: activity.place,
-        needsRide: activity.needsRide,
-        rideDirection: activity.rideDirection,
-      }));
-      if (!activity.repeating) break;
-    }
-    if (toUpsert.length > 0) await upsertEvents(toUpsert);
-  };
-
-  const futurEventIdsForActivity = (activityName: string): string[] => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return events
-      .filter((e) => e.childId === childId && e.eventType === activityName && e.startDateTime >= today.getTime())
-      .map((e) => e.eventId);
-  };
-
   const handleSave = async () => {
     const days = allDays.filter((d) => d in dayTimes);
     const rideDirection = directionFromChecks(rideTo, rideFrom);
@@ -147,21 +90,28 @@ export function ActivityEditorScreen() {
       ? [...child.activities, activity]
       : child.activities.map((a, i) => (i === idx ? activity : a));
 
-    // Delete all future events of the old activity (clean slate handles day/name changes)
-    if (!isNew && existing) {
-      const ids = futurEventIdsForActivity(existing.name);
-      if (ids.length > 0) await deleteEvents(ids);
-    }
+    // Cascade old (and current name, in case rename happened) future events.
+    const oldName = existing?.name ?? activity.name;
+    const idsOld = findFutureActivityEventIds(events, childId, oldName);
+    const idsNew = oldName !== activity.name
+      ? findFutureActivityEventIds(events, childId, activity.name)
+      : [];
+    const allIds = [...new Set([...idsOld, ...idsNew])];
+    if (allIds.length > 0) await deleteEvents(allIds);
 
     await upsertChild({ ...child, activities });
-    await generateActivityEvents(activity);
+
+    const toUpsert = expandActivity(activity, {
+      childId, createdByParentId: parent?.parentId ?? "anon",
+    });
+    if (toUpsert.length > 0) await upsertEvents(toUpsert);
+
     navigate(`/children/${childId}`);
   };
 
   const handleDelete = async () => {
-    // Delete future events before removing the activity
     if (existing) {
-      const ids = futurEventIdsForActivity(existing.name);
+      const ids = findFutureActivityEventIds(events, childId, existing.name);
       if (ids.length > 0) await deleteEvents(ids);
     }
     const activities = child.activities.filter((_, i) => i !== idx);
@@ -169,11 +119,17 @@ export function ActivityEditorScreen() {
     navigate(`/children/${childId}`);
   };
 
+  const checkedDays = Object.keys(dayTimes);
+  const missingTime = checkedDays.some((d) => !dayTimes[d].startTime);
+
   return (
     <>
       <Header title={isNew ? "New Activity" : "Edit Activity"} back />
       <main className="app-main">
         <div className="card">
+          <div style={{ marginBottom: 8 }}>
+            <ChildBadge name={child.name} color={child.colorTag} archived={child.isArchived} />
+          </div>
           <label>Name
             <input className="input" value={name}
               onChange={(e) => setName(e.target.value)}
@@ -247,10 +203,16 @@ export function ActivityEditorScreen() {
               </div>
             )}
           </div>
+
+          {missingTime && (
+            <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>
+              Set a start time for every checked day before saving.
+            </p>
+          )}
         </div>
         <div className="row" style={{ gap: 8, marginTop: 12 }}>
           <button className="btn btn--primary" style={{ flex: 1 }}
-            disabled={!name.trim()}
+            disabled={!name.trim() || missingTime}
             onClick={handleSave}>
             Save
           </button>

@@ -2,9 +2,11 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Header } from "@/components/Header";
 import { ChildDot } from "@/components/ChildDot";
+import { ChildBadge } from "@/components/ChildBadge";
 import { useApp } from "@/state/AppContext";
 import { ChildColor } from "@/domain/enums";
 import { newChild } from "@/domain/models";
+import { newChildId } from "@/domain/ids";
 
 export function ChildrenScreen() {
   const { parent, children, upsertChild } = useApp();
@@ -15,7 +17,7 @@ export function ChildrenScreen() {
   const save = async () => {
     if (!name.trim() || !parent) return;
     await upsertChild(newChild({
-      childId: `c-${Math.random().toString(36).slice(2, 10)}`,
+      childId: newChildId(),
       parentOwnerId: parent.parentId,
       name: name.trim(),
       colorTag: color,
@@ -62,11 +64,8 @@ export function ChildrenScreen() {
         {children.map((c) => (
           <Link to={`/children/${c.childId}`} key={c.childId}>
             <div className="card">
-              <div className="row">
-                <ChildDot color={c.colorTag} />
-                <strong>{c.name}</strong>
-              </div>
-              {c.notes && <p>{c.notes}</p>}
+              <ChildBadge name={c.name} color={c.colorTag} archived={c.isArchived} />
+              {c.notes && <p style={{ marginTop: 6 }}>{c.notes}</p>}
             </div>
           </Link>
         ))}

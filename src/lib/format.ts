@@ -1,6 +1,10 @@
-export function fmtDateTime(ms: number): string {
-  const d = new Date(ms);
-  return d.toLocaleString(undefined, {
+import type { AppLanguage } from "@/domain/enums";
+import { localeFor } from "./i18n";
+
+type Lang = (typeof AppLanguage)[keyof typeof AppLanguage] | undefined;
+
+export function fmtDateTime(ms: number, language?: Lang): string {
+  return new Date(ms).toLocaleString(language ? localeFor(language) : undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -9,16 +13,16 @@ export function fmtDateTime(ms: number): string {
   });
 }
 
-export function fmtDate(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, {
+export function fmtDate(ms: number, language?: Lang): string {
+  return new Date(ms).toLocaleDateString(language ? localeFor(language) : undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
   });
 }
 
-export function fmtTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString(undefined, {
+export function fmtTime(ms: number, language?: Lang): string {
+  return new Date(ms).toLocaleTimeString(language ? localeFor(language) : undefined, {
     hour: "numeric",
     minute: "2-digit",
   });
