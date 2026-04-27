@@ -1,6 +1,8 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AppProvider, useApp } from "@/state/AppContext";
 import { TabBar } from "@/components/TabBar";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { OpenFileScreen } from "@/screens/OpenFileScreen";
 import { DashboardScreen } from "@/screens/DashboardScreen";
 import { ChildrenScreen } from "@/screens/ChildrenScreen";
@@ -12,6 +14,7 @@ import { MyRidesScreen } from "@/screens/MyRidesScreen";
 import { NotificationsScreen } from "@/screens/NotificationsScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
 import { ActivityEditorScreen } from "@/screens/ActivityEditorScreen";
+import { landingScreenPath } from "@/domain/enums";
 
 export function App() {
   return (
@@ -27,6 +30,8 @@ function Shell() {
   if (!authUser || !parent) return <OpenFileScreen />;
   return (
     <div className="app">
+      <UpdateBanner />
+      <LandingRedirector />
       <Routes>
         <Route path="/" element={<DashboardScreen />} />
         <Route path="/children" element={<ChildrenScreen />} />
@@ -44,4 +49,19 @@ function Shell() {
       <TabBar />
     </div>
   );
+}
+
+/** On first sign-in this session, jump to the user's preferred landing screen. */
+function LandingRedirector() {
+  const { config } = useApp();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const done = useRef(false);
+  useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+    const target = landingScreenPath(config.defaultLandingScreen);
+    if (loc.pathname === "/" && target !== "/") nav(target, { replace: true });
+  }, [config.defaultLandingScreen, loc.pathname, nav]);
+  return null;
 }

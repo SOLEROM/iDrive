@@ -18,6 +18,17 @@ export type EventType = (typeof EventType)[keyof typeof EventType];
 export const RideDirection = { TO: "TO", FROM: "FROM", BOTH: "BOTH" } as const;
 export type RideDirection = (typeof RideDirection)[keyof typeof RideDirection];
 
+/**
+ * Sentinel `driverParentId` for rides assigned to someone outside the
+ * family group (typed by hand via the MemberPicker "Other…" option).
+ * The external driver's name is carried in `driverName`; the assignment
+ * is visible to every member so they can verify and follow up.
+ */
+export const EXTERNAL_DRIVER_ID = "external";
+export function isExternalDriver(driverParentId: string | undefined | null): boolean {
+  return driverParentId === EXTERNAL_DRIVER_ID;
+}
+
 export const RideLeg = { TO: "TO", FROM: "FROM" } as const;
 export type RideLeg = (typeof RideLeg)[keyof typeof RideLeg];
 
@@ -70,12 +81,20 @@ export type AppLanguage = (typeof AppLanguage)[keyof typeof AppLanguage];
 
 export const LandingScreen = {
   DASHBOARD: "DASHBOARD",
-  CALENDAR: "CALENDAR",
   EVENTS: "EVENTS",
   RIDES: "RIDES",
   CHILDREN: "CHILDREN",
 } as const;
 export type LandingScreen = (typeof LandingScreen)[keyof typeof LandingScreen];
+
+export function landingScreenPath(s: LandingScreen): string {
+  switch (s) {
+    case "EVENTS":   return "/events";
+    case "RIDES":    return "/rides";
+    case "CHILDREN": return "/children";
+    case "DASHBOARD": default: return "/";
+  }
+}
 
 export const DayOfWeek = {
   MONDAY: "MONDAY",

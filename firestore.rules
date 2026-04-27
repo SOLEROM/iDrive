@@ -12,22 +12,54 @@ service cloud.firestore {
 
     // Group root: any auth user can create (first member seeds the doc);
     // reads and updates require membership.
+    //
+    // members[] CAN be rewritten by a member, but only if the writer's
+    // own email remains in the new list — so a deploy of `families.yaml`
+    // (which signs in as a current member) can refresh the roster, while
+    // a member can't blank everyone out and lock the whole group out.
     match /groups/{groupId} {
       allow create: if request.auth != null &&
         request.auth.token.email != null &&
         request.auth.token.email.lower() in request.resource.data.members;
-      allow read, update: if isMember(groupId);
+      allow read: if isMember(groupId);
+      allow update: if isMember(groupId) &&
+        request.auth.token.email.lower() in request.resource.data.members;
     }
 
-    // Parents: member can write their own record.
+    // Parents: a member can write only their own record.
     match /groups/{groupId}/parents/{parentId} {
       allow read: if isMember(groupId);
       allow write: if isMember(groupId) && request.auth.uid == parentId;
     }
 
-    // All other sub-collections: members only.
-    match /groups/{groupId}/{sub}/{docId} {
-      allow read, write: if isMember(groupId);
+    // Assignments: explicit per-status write rules. Claim now goes
+    // straight to CONFIRMED — assigning a ride is a commitment, no
+    // separate confirm step. VOLUNTEERED is kept for legacy rows.
+    match /groups/{groupId}/assignments/{assignmentId} {
+      allow read: if isMember(groupId);
+      allow create: if isMember(groupId) &&
+        (request.resource.data.assignmentStatus == "UNASSIGNED" ||
+         request.resource.data.assignmentStatus == "VOLUNTEERED" ||
+         request.resource.data.assignmentStatus == "CONFIRMED");
+      allow delete: if isMember(groupId);
+      allow update: if isMember(groupId) && validTransition(
+        resource.data.assignmentStatus,
+        request.resource.data.assignmentStatus
+      );
     }
+
+    function validTransition(from, to) {
+      return
+        (from == "UNASSIGNED"  && (to == "VOLUNTEERED" || to == "CONFIRMED"  || to == "CANCELLED"  || to == "UNASSIGNED")) ||
+        (from == "VOLUNTEERED" && (to == "COMPLETED"   || to == "UNASSIGNED" || to == "CANCELLED"  || to == "CONFLICT"   || to == "VOLUNTEERED" || to == "CONFIRMED")) ||
+        (from == "CONFIRMED"   && (to == "COMPLETED"   || to == "UNASSIGNED" || to == "CANCELLED"  || to == "CONFLICT"   || to == "VOLUNTEERED" || to == "CONFIRMED")) ||
+        (from == "CONFLICT"    && (to == "VOLUNTEERED" || to == "CONFIRMED"  || to == "UNASSIGNED" || to == "CANCELLED"  || to == "CONFLICT")) ||
+        (from == "CANCELLED"   && (to == "UNASSIGNED"  || to == "CANCELLED")) ||
+        (from == "COMPLETED"   && (to == "VOLUNTEERED" || to == "CONFIRMED"  || to == "COMPLETED"));
+    }
+
+    // All other sub-collections (children, events): members only.
+    match /groups/{groupId}/children/{docId}     { allow read, write: if isMember(groupId); }
+    match /groups/{groupId}/events/{docId}       { allow read, write: if isMember(groupId); }
   }
 }

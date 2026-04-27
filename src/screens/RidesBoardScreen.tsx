@@ -1,76 +1,150 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Header } from "@/components/Header";
-import { AssignmentStatus, ChildColorHex, RideDirection, RideLeg } from "@/domain/enums";
+import { ChildBadge } from "@/components/ChildBadge";
+import { MemberPicker } from "@/components/MemberPicker";
+import { RideStatusChip } from "@/components/RideStatusChip";
+import {
+  AssignmentStatus, ChildColor, ChildColorHex, EXTERNAL_DRIVER_ID,
+  RideDirection, RideLeg, isExternalDriver,
+} from "@/domain/enums";
 import { useApp } from "@/state/AppContext";
 import { newAssignment } from "@/domain/models";
+import { newAssignmentId } from "@/domain/ids";
+import { todayStart, endOfDay } from "@/domain/timeWindow";
 import { fmtDateTime } from "@/lib/format";
+import { t } from "@/lib/i18n";
 
 export function RidesBoardScreen() {
   const navigate = useNavigate();
-  const { parent, children, events, assignments, upsertAssignment, upsertEvent } = useApp();
+  const {
+    parent, parents, children, events, assignments, config,
+    upsertAssignment, upsertEvent,
+  } = useApp();
   const [filterChildId, setFilterChildId] = useState<string>("");
   const [filterMine, setFilterMine] = useState(false);
   const [noteOpenId, setNoteOpenId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
+  const [pickerOpenKey, setPickerOpenKey] = useState<string | null>(null);
+  const [override, setOverride] = useState<{
+    eventId: string; leg: RideLeg; existing: ReturnType<typeof activeAssignmentLookup>; newDriverId: string; newDriverName: string;
+  } | null>(null);
+  const [otherPrompt, setOtherPrompt] = useState<{ eventId: string; leg: RideLeg } | null>(null);
+  const [otherDraft, setOtherDraft] = useState("");
+
+  function activeAssignmentLookup(eventId: string, leg: RideLeg) {
+    return assignments.find(
+      (a) => a.eventId === eventId && a.rideLeg === leg &&
+        a.assignmentStatus !== AssignmentStatus.UNASSIGNED &&
+        a.assignmentStatus !== AssignmentStatus.CANCELLED,
+    ) ?? null;
+  }
+
+  async function undoComplete(eventId: string, leg: RideLeg) {
+    const existing = activeAssignmentLookup(eventId, leg);
+    if (!existing) return;
+    await upsertAssignment({
+      ...existing,
+      assignmentStatus: AssignmentStatus.VOLUNTEERED,
+      completedAt: null,
+    });
+  }
 
   const myEventIds = new Set(
     assignments
-      .filter((a) => a.driverParentId === parent?.parentId && a.assignmentStatus !== AssignmentStatus.UNASSIGNED)
+      .filter((a) =>
+        (a.driverParentId === parent?.parentId || a.claimedByParentId === parent?.parentId) &&
+        a.assignmentStatus !== AssignmentStatus.UNASSIGNED &&
+        a.assignmentStatus !== AssignmentStatus.CANCELLED)
       .map((a) => a.eventId),
   );
 
-  const rideEvents = events.filter((e) =>
-    e.needsRide &&
-    (!filterChildId || e.childId === filterChildId) &&
-    (!filterMine || myEventIds.has(e.eventId)),
-  );
-
-  // Returns the active (non-unassigned) assignment for a leg, if any.
-  const activeAssignment = (eventId: string, leg: RideLeg) =>
-    assignments.find(
-      (a) => a.eventId === eventId && a.rideLeg === leg &&
-        a.assignmentStatus !== AssignmentStatus.UNASSIGNED,
-    ) ?? null;
-
-  const toggleClaim = async (eventId: string, leg: RideLeg) => {
-    if (!parent) return;
-    const existing = activeAssignment(eventId, leg);
-    if (existing && existing.driverParentId === parent.parentId) {
-      // I'm the current assignee → unassign
-      await upsertAssignment({ ...existing, assignmentStatus: AssignmentStatus.UNASSIGNED, claimedAt: null });
-    } else {
-      // Unassigned or someone else → claim (override)
-      await upsertAssignment(newAssignment({
-        assignmentId: existing?.assignmentId ?? `a-${Math.random().toString(36).slice(2, 10)}`,
-        eventId,
-        driverParentId: parent.parentId,
-        driverName: parent.displayName,
-        rideLeg: leg,
-        assignmentStatus: AssignmentStatus.VOLUNTEERED,
-        claimedAt: Date.now(),
-      }));
-    }
-  };
+  const startOfToday = todayStart();
+  const endOfToday = endOfDay(startOfToday);
+  const rideEvents = events
+    .filter((e) =>
+      e.needsRide &&
+      e.startDateTime >= startOfToday &&
+      (!filterChildId || e.childId === filterChildId) &&
+      (!filterMine || myEventIds.has(e.eventId)),
+    )
+    .sort((a, b) => a.startDateTime - b.startDateTime);
 
   const filteredChild = filterChildId ? children.find((c) => c.childId === filterChildId) : null;
   const bgHex = filterMine ? "#ef4444" : ((!filterMine && filteredChild) ? ChildColorHex[filteredChild.colorTag] : null);
 
-  const btnBase: React.CSSProperties = {
-    padding: "5px 12px", minHeight: "auto", fontSize: 13, whiteSpace: "nowrap",
-    borderRadius: 8, cursor: "pointer", boxSizing: "border-box",
-  };
+  async function performClaim(
+    eventId: string, leg: RideLeg, driverId: string, driverName: string, existingId?: string,
+  ) {
+    if (!parent) return;
+    await upsertAssignment(newAssignment({
+      assignmentId: existingId ?? newAssignmentId(),
+      eventId,
+      driverParentId: driverId,
+      driverName,
+      claimedByParentId: parent.parentId,
+      rideLeg: leg,
+      assignmentStatus: AssignmentStatus.VOLUNTEERED,
+      claimedAt: Date.now(),
+    }));
+  }
+
+  async function release(eventId: string, leg: RideLeg) {
+    const existing = activeAssignmentLookup(eventId, leg);
+    if (!existing) return;
+    await upsertAssignment({
+      ...existing,
+      driverParentId: "",
+      driverName: "",
+      claimedByParentId: "",
+      assignmentStatus: AssignmentStatus.UNASSIGNED,
+      claimedAt: null,
+    });
+  }
+
+  async function complete(eventId: string, leg: RideLeg) {
+    const existing = activeAssignmentLookup(eventId, leg);
+    if (!existing) return;
+    await upsertAssignment({
+      ...existing,
+      assignmentStatus: AssignmentStatus.COMPLETED,
+      completedAt: Date.now(),
+    });
+  }
+
+  function tryAccept(eventId: string, leg: RideLeg, driverId: string, driverName: string) {
+    if (!parent) return;
+    const existing = activeAssignmentLookup(eventId, leg);
+    if (existing && existing.driverParentId !== driverId) {
+      setOverride({ eventId, leg, existing, newDriverId: driverId, newDriverName: driverName });
+      return;
+    }
+    void performClaim(eventId, leg, driverId, driverName, existing?.assignmentId);
+  }
+
+  async function confirmOverride() {
+    if (!override) return;
+    const { eventId, leg, existing, newDriverId, newDriverName } = override;
+    if (existing) {
+      await upsertAssignment({
+        ...existing,
+        assignmentStatus: AssignmentStatus.CANCELLED,
+      });
+    }
+    await performClaim(eventId, leg, newDriverId, newDriverName);
+    setOverride(null);
+  }
 
   return (
     <>
       <Header title="Rides Board" />
       <div style={{ display: "flex", gap: 8, padding: "8px 12px", background: "var(--surface)", borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
         <button
-          style={{ ...btnBase, border: "2px solid var(--border)", background: (!filterChildId && !filterMine) ? "var(--primary)" : "transparent", color: (!filterChildId && !filterMine) ? "#fff" : "var(--fg)", fontWeight: (!filterChildId && !filterMine) ? 600 : 400 }}
+          style={chipBtn(!filterChildId && !filterMine, "var(--border)", "var(--primary)")}
           onClick={() => { setFilterChildId(""); setFilterMine(false); }}
         >All</button>
         <button
-          style={{ ...btnBase, border: "2px solid #ef4444", background: filterMine ? "#ef4444" : "transparent", color: filterMine ? "#fff" : "#ef4444", fontWeight: filterMine ? 600 : 400 }}
+          style={chipBtn(filterMine, "#ef4444", "#ef4444")}
           onClick={() => { setFilterMine((v) => !v); setFilterChildId(""); }}
         >My</button>
         {children.map((c) => {
@@ -79,7 +153,7 @@ export function RidesBoardScreen() {
           return (
             <button
               key={c.childId}
-              style={{ ...btnBase, border: `2px solid ${hex}`, background: isActive ? hex : "transparent", color: isActive ? "#fff" : hex, fontWeight: isActive ? 600 : 400 }}
+              style={chipBtn(isActive, hex, hex)}
               onClick={() => { setFilterChildId(c.childId); setFilterMine(false); }}
             >{c.name}</button>
           );
@@ -109,29 +183,22 @@ export function RidesBoardScreen() {
             setNoteOpenId(null);
           };
           return (
-            <div className="card" key={e.eventId} style={{ cursor: "pointer", ...(hex ? { borderLeft: `4px solid ${hex}` } : {}) }}
+            <div className="card" key={e.eventId}
+              style={{ cursor: "pointer", ...(hex ? { borderLeft: `4px solid ${hex}` } : {}) }}
               onClick={() => navigate(`/events/${e.eventId}`)}>
               <div className="row row--between" style={{ alignItems: "flex-start" }}>
-                <div>
-                  <strong>{e.title}</strong>
-                  <p style={{ margin: "2px 0 0" }}>{fmtDateTime(e.startDateTime)}</p>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                    {child
+                      ? <ChildBadge name={child.name} color={child.colorTag} archived={child.isArchived} />
+                      : <ChildBadge name="" color={ChildColor.BLUE} />}
+                    <strong>{e.title}</strong>
+                  </div>
+                  <p style={{ margin: "2px 0 0" }}>{fmtDateTime(e.startDateTime, config.language)}</p>
                 </div>
                 <button
                   onClick={toggleNote}
-                  style={{
-                    background: hasNote ? "var(--surface)" : "transparent",
-                    border: hasNote ? "1px solid var(--border)" : "1px dashed var(--border)",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    padding: "3px 7px",
-                    fontSize: 11,
-                    color: hasNote ? "var(--fg)" : "var(--muted)",
-                    maxWidth: 120,
-                    textAlign: "left",
-                    lineHeight: 1.3,
-                    flexShrink: 0,
-                    marginLeft: 8,
-                  }}
+                  style={noteBtnStyle(hasNote)}
                   title={hasNote ? e.description : "Add note"}
                 >
                   {preview ?? "+ note"}
@@ -141,9 +208,7 @@ export function RidesBoardScreen() {
                 <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 8 }}
                   onClick={(ev) => ev.stopPropagation()}>
                   <textarea
-                    className="textarea"
-                    rows={3}
-                    value={noteDraft}
+                    className="textarea" rows={3} value={noteDraft}
                     onChange={(ev) => setNoteDraft(ev.target.value)}
                     placeholder="Notes for this ride…"
                     style={{ marginBottom: 6 }}
@@ -158,26 +223,82 @@ export function RidesBoardScreen() {
                 </div>
               )}
               {legs.map((leg) => {
-                const a = activeAssignment(e.eventId, leg);
+                const a = activeAssignmentLookup(e.eventId, leg);
                 const isMine = a?.driverParentId === parent?.parentId;
+                const pickerKey = `${e.eventId}|${leg}`;
+                const pickerOpen = pickerOpenKey === pickerKey;
+                const external = !!a && isExternalDriver(a.driverParentId);
                 return (
-                  <div className="row row--between" key={leg}
-                    style={{ padding: "8px 0", borderTop: "1px solid var(--border)" }}>
-                    <div>
-                      <span>Leg: <strong>{leg}</strong></span>
-                      {a && (
-                        <span style={{ marginLeft: 10, fontSize: 15, fontWeight: 700, color: isMine ? "var(--primary)" : "#ef4444" }}>
-                          {isMine ? "you" : (a.driverName || a.driverParentId)}
-                        </span>
-                      )}
+                  <div key={leg} style={{
+                    borderTop: "1px solid var(--border)", padding: "8px 0",
+                    ...(external ? { background: "#ef444422" } : {}),
+                  }}
+                    onClick={(ev) => ev.stopPropagation()}>
+                    <div className="row row--between" style={{ alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                        <span>Leg: <strong>{leg}</strong></span>
+                        {a && <RideStatusChip status={a.assignmentStatus} />}
+                        {external && (
+                          <span className="chip" style={{ background: "#ef4444", color: "#fff" }}>
+                            {t("externalDriver", config.language)}
+                          </span>
+                        )}
+                        {a && (
+                          <span style={{
+                            fontSize: 14, fontWeight: 600,
+                            color: external ? "#ef4444" : isMine ? "var(--primary)" : "var(--fg)",
+                          }}>
+                            {isMine ? "you" : (a.driverName || a.driverParentId)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="row" style={{ gap: 4, position: "relative" }}>
+                        {!a && (
+                          <>
+                            <button className="btn" style={legBtn}
+                              onClick={() => parent && tryAccept(e.eventId, leg, parent.parentId, parent.displayName)}>
+                              Accept
+                            </button>
+                            <button className="btn btn--ghost" style={{ ...legBtn, padding: "6px 8px" }}
+                              aria-label="Assign to…"
+                              onClick={() => setPickerOpenKey(pickerOpen ? null : pickerKey)}>▾</button>
+                          </>
+                        )}
+                        {a && (a.assignmentStatus === AssignmentStatus.VOLUNTEERED ||
+                               a.assignmentStatus === AssignmentStatus.CONFIRMED) && (
+                          <>
+                            {e.startDateTime <= endOfToday && (
+                              <button className="btn" style={legBtn}
+                                onClick={() => complete(e.eventId, leg)}>Done</button>
+                            )}
+                            <button className="btn btn--ghost" style={legBtn}
+                              onClick={() => release(e.eventId, leg)}>Release</button>
+                          </>
+                        )}
+                        {a && a.assignmentStatus === AssignmentStatus.COMPLETED && (
+                          <button className="btn btn--ghost" style={legBtn}
+                            onClick={() => undoComplete(e.eventId, leg)}>Undo done</button>
+                        )}
+                        {pickerOpen && parent && (
+                          <MemberPicker
+                            parents={parents}
+                            meId={parent.parentId}
+                            otherLabel={t("otherDots", config.language)}
+                            onPick={(pid, pname) => tryAccept(e.eventId, leg, pid, pname)}
+                            onPickOther={() => {
+                              setOtherDraft("");
+                              setOtherPrompt({ eventId: e.eventId, leg });
+                            }}
+                            onClose={() => setPickerOpenKey(null)}
+                          />
+                        )}
+                      </div>
                     </div>
-                    <button
-                      className={isMine ? "btn btn--ghost" : (a ? "btn btn--ghost" : "btn")}
-                      style={{ padding: "6px 12px", minHeight: "auto" }}
-                      onClick={(ev) => { ev.stopPropagation(); toggleClaim(e.eventId, leg); }}
-                    >
-                      {isMine ? "Unaccept" : "Accept"}
-                    </button>
+                    {a && a.claimedByParentId && a.claimedByParentId !== a.driverParentId && (
+                      <p style={{ fontSize: 11, color: "var(--muted)", margin: "4px 0 0" }}>
+                        Assigned by {parents.find((p) => p.parentId === a.claimedByParentId)?.displayName ?? "another member"}
+                      </p>
+                    )}
                   </div>
                 );
               })}
@@ -186,6 +307,135 @@ export function RidesBoardScreen() {
         })}
       </main>
       <Link to="/events/new" className="fab" aria-label="Add ride event">＋</Link>
+
+      {override && (
+        <OverridePrompt
+          existingName={override.existing?.driverName ?? ""}
+          newName={override.newDriverName}
+          onCancel={() => setOverride(null)}
+          onConfirm={() => void confirmOverride()}
+        />
+      )}
+
+      {otherPrompt && (
+        <OtherDriverPrompt
+          draft={otherDraft}
+          setDraft={setOtherDraft}
+          language={config.language}
+          onCancel={() => setOtherPrompt(null)}
+          onConfirm={() => {
+            const name = otherDraft.trim();
+            if (!name) return;
+            tryAccept(otherPrompt.eventId, otherPrompt.leg, EXTERNAL_DRIVER_ID, name);
+            setOtherPrompt(null);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function OtherDriverPrompt({
+  draft, setDraft, language, onCancel, onConfirm,
+}: {
+  draft: string;
+  setDraft: (v: string) => void;
+  language: Parameters<typeof t>[1];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div role="dialog" aria-modal="true"
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 50, padding: 16,
+      }}
+      onClick={onCancel}
+    >
+      <div className="card" style={{ maxWidth: 360, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+        <h2 style={{ marginTop: 0 }}>{t("externalDriver", language)}</h2>
+        <label>{t("enterDriverName", language)}
+          <input
+            className="input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && draft.trim()) onConfirm(); }}
+            autoFocus
+          />
+        </label>
+        <div className="row" style={{ gap: 8, marginTop: 12 }}>
+          <button className="btn btn--ghost" style={{ flex: 1 }} onClick={onCancel}>
+            {t("cancel", language)}
+          </button>
+          <button
+            className="btn btn--danger"
+            style={{ flex: 1 }}
+            disabled={!draft.trim()}
+            onClick={onConfirm}
+          >
+            {t("assign", language)}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const legBtn: React.CSSProperties = {
+  padding: "6px 12px", minHeight: "auto", fontSize: 13,
+};
+
+function chipBtn(active: boolean, border: string, fg: string): React.CSSProperties {
+  return {
+    padding: "5px 12px", minHeight: "auto", fontSize: 13, whiteSpace: "nowrap",
+    borderRadius: 8, cursor: "pointer", boxSizing: "border-box",
+    border: `2px solid ${border}`,
+    background: active ? border : "transparent",
+    color: active ? "#fff" : fg,
+    fontWeight: active ? 600 : 400,
+  };
+}
+
+function noteBtnStyle(hasNote: boolean): React.CSSProperties {
+  return {
+    background: hasNote ? "var(--surface)" : "transparent",
+    border: hasNote ? "1px solid var(--border)" : "1px dashed var(--border)",
+    borderRadius: 6,
+    cursor: "pointer",
+    padding: "3px 7px",
+    fontSize: 11,
+    color: hasNote ? "var(--fg)" : "var(--muted)",
+    maxWidth: 120,
+    textAlign: "left",
+    lineHeight: 1.3,
+    flexShrink: 0,
+    marginLeft: 8,
+  };
+}
+
+function OverridePrompt({ existingName, newName, onCancel, onConfirm }: {
+  existingName: string; newName: string;
+  onCancel: () => void; onConfirm: () => void;
+}) {
+  return (
+    <div role="dialog" aria-modal="true"
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 50, padding: 16,
+      }}
+      onClick={onCancel}
+    >
+      <div className="card" style={{ maxWidth: 360, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+        <h2 style={{ marginTop: 0 }}>Override ride?</h2>
+        <p>This leg is already taken by <strong>{existingName || "another parent"}</strong>.</p>
+        <p>Reassign to <strong>{newName}</strong>?</p>
+        <div className="row" style={{ gap: 8, marginTop: 8 }}>
+          <button className="btn btn--ghost" style={{ flex: 1 }} onClick={onCancel}>Cancel</button>
+          <button className="btn" style={{ flex: 1 }} onClick={onConfirm}>Yes, reassign</button>
+        </div>
+      </div>
+    </div>
   );
 }

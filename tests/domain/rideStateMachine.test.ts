@@ -7,20 +7,24 @@ const {
 } = AssignmentStatus;
 
 describe("RideAssignmentStateMachine", () => {
-  it("UNASSIGNED → VOLUNTEERED is valid", () => {
+  it("UNASSIGNED → VOLUNTEERED (claim) is valid", () => {
     expect(canTransition(UNASSIGNED, VOLUNTEERED)).toBe(true);
   });
 
-  it("VOLUNTEERED → CONFIRMED is valid", () => {
-    expect(canTransition(VOLUNTEERED, CONFIRMED)).toBe(true);
-  });
-
-  it("CONFIRMED → COMPLETED is valid", () => {
-    expect(canTransition(CONFIRMED, COMPLETED)).toBe(true);
+  it("VOLUNTEERED → COMPLETED (done) is valid", () => {
+    expect(canTransition(VOLUNTEERED, COMPLETED)).toBe(true);
   });
 
   it("VOLUNTEERED → UNASSIGNED (release) is valid", () => {
     expect(canTransition(VOLUNTEERED, UNASSIGNED)).toBe(true);
+  });
+
+  it("CONFIRMED → COMPLETED (legacy) is valid", () => {
+    expect(canTransition(CONFIRMED, COMPLETED)).toBe(true);
+  });
+
+  it("CONFIRMED → UNASSIGNED (legacy release) is valid", () => {
+    expect(canTransition(CONFIRMED, UNASSIGNED)).toBe(true);
   });
 
   it("VOLUNTEERED → CONFLICT (sync collision) is valid", () => {
@@ -35,21 +39,16 @@ describe("RideAssignmentStateMachine", () => {
     expect(canTransition(CANCELLED, UNASSIGNED)).toBe(true);
   });
 
-  it("UNASSIGNED → CONFIRMED is invalid", () => {
-    expect(canTransition(UNASSIGNED, CONFIRMED)).toBe(false);
-  });
-
   it("UNASSIGNED → COMPLETED is invalid", () => {
     expect(canTransition(UNASSIGNED, COMPLETED)).toBe(false);
   });
 
-  it("VOLUNTEERED → COMPLETED is invalid (must confirm first)", () => {
-    expect(canTransition(VOLUNTEERED, COMPLETED)).toBe(false);
-  });
-
-  it("COMPLETED is terminal", () => {
-    expect(isTerminal(COMPLETED)).toBe(true);
+  it("COMPLETED can be undone back to VOLUNTEERED", () => {
+    expect(isTerminal(COMPLETED)).toBe(false);
+    expect(canTransition(COMPLETED, VOLUNTEERED)).toBe(true);
+    // CONFIRMED kept only for legacy rows; nothing else is reachable.
     for (const target of Object.values(AssignmentStatus)) {
+      if (target === VOLUNTEERED || target === CONFIRMED) continue;
       expect(canTransition(COMPLETED, target)).toBe(false);
     }
   });

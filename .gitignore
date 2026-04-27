@@ -40,6 +40,19 @@ lerna-debug.log*
 .env.local
 .env.*.local
 *.pem
+*.p12
+*.key
+
+# ─── GCP / Firebase credentials (never commit) ──────────────────────────────
+serviceAccount.json
+serviceAccount*.json
+*-serviceAccount.json
+*service-account*.json
+*service_account*.json
+firebase-adminsdk-*.json
+.firebase/
+.runtimeconfig.json
+.gcloudignore
 
 # ─── Editors / OS ───────────────────────────────────────────────────────────
 .vscode/*
@@ -55,12 +68,14 @@ Thumbs.db
 *.local
 
 # ─── User data files ────────────────────────────────────────────────────────
-# The app's data file (@idrive.xlsx) must never be committed — it contains
+# The app's data file (idrive.xlsx) must never be committed — it contains
 # personal/group data and is managed by the user outside the repo.
-*.xlsxserviceAccount.json
+*.xlsx
 
-
+# ─── Group membership (PII — emails) ────────────────────────────────────────
+# `families.yaml` is the source of truth for authorised emails. The generated
+# `src/familiesData.ts` ships in the production bundle but should NOT live in
+# the source repo (avoids leaking emails via GitHub). Both are rebuilt by
+# `./run.sh --firebase` from the local `families.yaml`.
 families.yaml
-*.cache
-.firebase/
-.firebase/*
+src/familiesData.ts

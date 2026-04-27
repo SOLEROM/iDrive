@@ -93,6 +93,8 @@ export interface RideAssignment {
   eventId: string;
   driverParentId: string;
   driverName: string;
+  /** Who pressed "Assign". Equals driverParentId on self-claim. */
+  claimedByParentId?: string;
   rideLeg: RideLeg;
   assignmentStatus: AssignmentStatus;
   notes: string;
