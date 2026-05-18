@@ -2,7 +2,9 @@ import { Header } from "@/components/Header";
 import { AssignmentStatus, ChildColorHex, isExternalDriver } from "@/domain/enums";
 import { RideStatusChip } from "@/components/RideStatusChip";
 import { ChildBadge } from "@/components/ChildBadge";
+import { AlarmToggle } from "@/components/AlarmToggle";
 import { useApp } from "@/state/AppContext";
+import { useRideAlarms } from "@/state/useRideAlarms";
 import { canTransition, allowedNext } from "@/domain/rideStateMachine";
 import { todayStart, endOfDay } from "@/domain/timeWindow";
 import { fmtDateTime } from "@/lib/format";
@@ -10,6 +12,7 @@ import { t } from "@/lib/i18n";
 
 export function MyRidesScreen() {
   const { parent, parents, children, events, assignments, upsertAssignment, config } = useApp();
+  const { isAlarmOn, getLeadMinutes, enableAlarm, disableAlarm } = useRideAlarms(assignments, events, children, config);
   const childColorMap = new Map(children.map((c) => [c.childId, ChildColorHex[c.colorTag]]));
   const childById = new Map(children.map((c) => [c.childId, c]));
 
@@ -20,12 +23,26 @@ export function MyRidesScreen() {
   //   - rides assigned to a non-member ("external") driver — every member
   //     should see those, tinted red, so the family can verify out-of-group
   //     coverage.
+  const now = Date.now();
+  const TEN_MIN = 10 * 60_000;
+
   const mine = assignments.filter((a) => {
     const isMine = a.driverParentId === parent?.parentId || a.claimedByParentId === parent?.parentId;
     const external = isExternalDriver(a.driverParentId);
     if (!isMine && !external) return false;
-    if (config.showCompletedRidesByDefault) return true;
-    return a.assignmentStatus !== AssignmentStatus.CANCELLED;
+    if (a.assignmentStatus === AssignmentStatus.CANCELLED) return false;
+    const evt = events.find((e) => e.eventId === a.eventId);
+    if (evt) {
+      const cutoff = (a.rideLeg === "FROM" ? evt.endDateTime : evt.startDateTime) + TEN_MIN;
+      if (now > cutoff) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    const evtA = events.find((e) => e.eventId === a.eventId);
+    const evtB = events.find((e) => e.eventId === b.eventId);
+    const timeA = evtA ? (a.rideLeg === "FROM" ? evtA.endDateTime : evtA.startDateTime) : 0;
+    const timeB = evtB ? (b.rideLeg === "FROM" ? evtB.endDateTime : evtB.startDateTime) : 0;
+    return timeA - timeB;
   });
 
   const setStatus = async (id: string, next: AssignmentStatus) => {
@@ -71,10 +88,18 @@ export function MyRidesScreen() {
                       {t("externalDriver", config.language)}
                     </span>
                   )}
-                  <RideStatusChip status={a.assignmentStatus} />
+                  {a.assignmentStatus !== AssignmentStatus.VOLUNTEERED && (
+                    <RideStatusChip status={a.assignmentStatus} />
+                  )}
+                  <AlarmToggle
+                    isOn={isAlarmOn(a.assignmentId)}
+                    leadMinutes={getLeadMinutes(a.assignmentId)}
+                    onEnable={(mins) => void enableAlarm(a.assignmentId, mins)}
+                    onDisable={() => disableAlarm(a.assignmentId)}
+                  />
                 </div>
               </div>
-              {evt && <p>{fmtDateTime(evt.startDateTime, config.language)}</p>}
+              {evt && <p>{fmtDateTime(a.rideLeg === "FROM" ? evt.endDateTime : evt.startDateTime, config.language)}</p>}
               <p>
                 Leg: <strong>{a.rideLeg}</strong>
                 {external && (

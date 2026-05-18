@@ -3,7 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { Header } from "@/components/Header";
 import { ChildBadge } from "@/components/ChildBadge";
 import { MemberPicker } from "@/components/MemberPicker";
-import { RideStatusChip } from "@/components/RideStatusChip";
 import {
   AssignmentStatus, ChildColor, ChildColorHex, EXTERNAL_DRIVER_ID,
   RideDirection, RideLeg, isExternalDriver,
@@ -230,29 +229,36 @@ export function RidesBoardScreen() {
                 const external = !!a && isExternalDriver(a.driverParentId);
                 return (
                   <div key={leg} style={{
-                    borderTop: "1px solid var(--border)", padding: "8px 0",
+                    borderTop: "1px solid var(--border)", padding: "6px 0",
                     ...(external ? { background: "#ef444422" } : {}),
                   }}
                     onClick={(ev) => ev.stopPropagation()}>
-                    <div className="row row--between" style={{ alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                      <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                        <span>Leg: <strong>{leg}</strong></span>
-                        {a && <RideStatusChip status={a.assignmentStatus} />}
-                        {external && (
-                          <span className="chip" style={{ background: "#ef4444", color: "#fff" }}>
-                            {t("externalDriver", config.language)}
-                          </span>
-                        )}
-                        {a && (
-                          <span style={{
-                            fontSize: 14, fontWeight: 600,
-                            color: external ? "#ef4444" : isMine ? "var(--primary)" : "var(--fg)",
-                          }}>
-                            {isMine ? "you" : (a.driverName || a.driverParentId)}
-                          </span>
-                        )}
-                      </div>
-                      <div className="row" style={{ gap: 4, position: "relative" }}>
+                    <div className="row" style={{ alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+                      {/* Leg direction */}
+                      <span style={{ fontWeight: 700, fontSize: 13, minWidth: 38, flexShrink: 0 }}>{leg}</span>
+
+                      {/* Driver pill — replaces VOLUNTEERED chip + separate name */}
+                      {a ? (
+                        <span style={{
+                          fontSize: 12, fontWeight: 600, flexShrink: 1, minWidth: 0,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          background: external ? "#ef444422" : isMine ? "var(--primary-weak)" : "var(--border)",
+                          color: external ? "#ef4444" : isMine ? "var(--primary)" : "var(--fg)",
+                          padding: "2px 8px", borderRadius: 999,
+                        }}>
+                          {external
+                            ? (a.driverName || t("externalDriver", config.language))
+                            : isMine
+                              ? "you" + (a.assignmentStatus === AssignmentStatus.COMPLETED ? " ✓" : "")
+                              : (a.driverName || a.driverParentId) + (a.assignmentStatus === AssignmentStatus.COMPLETED ? " ✓" : "")}
+                        </span>
+                      ) : null}
+
+                      {/* Push buttons to the right */}
+                      <div style={{ flex: 1 }} />
+
+                      {/* Action buttons */}
+                      <div className="row" style={{ gap: 4, position: "relative", flexShrink: 0 }}>
                         {!a && (
                           <>
                             <button className="btn" style={legBtn}
@@ -277,7 +283,7 @@ export function RidesBoardScreen() {
                         )}
                         {a && a.assignmentStatus === AssignmentStatus.COMPLETED && (
                           <button className="btn btn--ghost" style={legBtn}
-                            onClick={() => undoComplete(e.eventId, leg)}>Undo done</button>
+                            onClick={() => undoComplete(e.eventId, leg)}>Undo</button>
                         )}
                         {pickerOpen && parent && (
                           <MemberPicker
@@ -295,8 +301,8 @@ export function RidesBoardScreen() {
                       </div>
                     </div>
                     {a && a.claimedByParentId && a.claimedByParentId !== a.driverParentId && (
-                      <p style={{ fontSize: 11, color: "var(--muted)", margin: "4px 0 0" }}>
-                        Assigned by {parents.find((p) => p.parentId === a.claimedByParentId)?.displayName ?? "another member"}
+                      <p style={{ fontSize: 11, color: "var(--muted)", margin: "2px 0 0", paddingLeft: 44 }}>
+                        via {parents.find((p) => p.parentId === a.claimedByParentId)?.displayName ?? "another member"}
                       </p>
                     )}
                   </div>

@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Header } from "@/components/Header";
 import { useApp } from "@/state/AppContext";
+import { useRideAlarms } from "@/state/useRideAlarms";
+import { AlarmToggle } from "@/components/AlarmToggle";
 import { fmtDateTime } from "@/lib/format";
 import { localeFor, t } from "@/lib/i18n";
 import { ChildBadge } from "@/components/ChildBadge";
@@ -15,6 +17,7 @@ type UpcomingRange = "1d" | "7d";
 export function DashboardScreen() {
   const navigate = useNavigate();
   const { parent, children, events, assignments, upsertAssignment, config } = useApp();
+  const { isAlarmOn, getLeadMinutes, enableAlarm, disableAlarm } = useRideAlarms(assignments, events, children, config);
   const childColorMap = new Map(children.map((c) => [c.childId, ChildColorHex[c.colorTag]]));
   const [range, setRange] = useState<UpcomingRange>("1d");
 
@@ -54,6 +57,12 @@ export function DashboardScreen() {
     if (a.claimedByParentId === parent?.parentId) return true;
     if (isExternalDriver(a.driverParentId)) return true;
     return false;
+  }).sort((a, b) => {
+    const evtA = events.find((e) => e.eventId === a.eventId);
+    const evtB = events.find((e) => e.eventId === b.eventId);
+    const timeA = evtA ? (a.rideLeg === "FROM" ? evtA.endDateTime : evtA.startDateTime) : 0;
+    const timeB = evtB ? (b.rideLeg === "FROM" ? evtB.endDateTime : evtB.startDateTime) : 0;
+    return timeA - timeB;
   });
 
   const weekEnd = endOfWeek();
@@ -119,7 +128,7 @@ export function DashboardScreen() {
                       })()}
                       <strong>{evt?.title ?? a.eventId} · {a.rideLeg}</strong>
                     </div>
-                    {evt && <p style={{ margin: "2px 0 0" }}>{fmtDateTime(evt.startDateTime, config.language)}</p>}
+                    {evt && <p style={{ margin: "2px 0 0" }}>{fmtDateTime(a.rideLeg === "FROM" ? evt.endDateTime : evt.startDateTime, config.language)}</p>}
                     {external && (
                       <p style={{ margin: "2px 0 0", color: "#ef4444", fontWeight: 600, fontSize: 13 }}>
                         {t("externalDriver", config.language)}: {a.driverName || "?"}
@@ -141,7 +150,16 @@ export function DashboardScreen() {
                         {t("externalDriver", config.language)}
                       </span>
                     )}
-                    <RideStatusChip status={a.assignmentStatus} />
+                    {a.assignmentStatus !== AssignmentStatus.VOLUNTEERED && (
+                      <RideStatusChip status={a.assignmentStatus} />
+                    )}
+                    <AlarmToggle
+                      isOn={isAlarmOn(a.assignmentId)}
+                      leadMinutes={getLeadMinutes(a.assignmentId)}
+                      onEnable={(mins) => void enableAlarm(a.assignmentId, mins)}
+                      onDisable={() => disableAlarm(a.assignmentId)}
+                      stopPropagation
+                    />
                     {evt && evt.startDateTime <= endOfToday && (
                       <button
                         className="btn"
