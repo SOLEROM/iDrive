@@ -1,4 +1,4 @@
-import { onSnapshot, setDoc } from "firebase/firestore";
+import { getDoc, onSnapshot, setDoc } from "firebase/firestore";
 import type { Activity } from "@/domain/models";
 import { groupDoc } from "./paths";
 
@@ -7,16 +7,21 @@ export interface SharedConfig {
   globalActivities: Activity[];
 }
 
+// Refresh roster on every sign-in, but never touch globalLocations /
+// globalActivities — otherwise a re-sign-in patches them back to [] and
+// wipes everyone's shared lists.
 export async function ensureGroupDoc(
   groupId: string,
   groupName: string,
   members: string[],
 ): Promise<void> {
-  await setDoc(
-    groupDoc(groupId),
-    { groupName, members, globalLocations: [], globalActivities: [] },
-    { merge: true },
-  );
+  const ref = groupDoc(groupId);
+  const existing = await getDoc(ref);
+  if (existing.exists()) {
+    await setDoc(ref, { groupName, members }, { merge: true });
+  } else {
+    await setDoc(ref, { groupName, members, globalLocations: [], globalActivities: [] });
+  }
 }
 
 export async function patchSharedConfig(

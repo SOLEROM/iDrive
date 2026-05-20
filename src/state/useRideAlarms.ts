@@ -20,6 +20,21 @@ function legTime(a: RideAssignment, evt: Event): number {
   return a.rideLeg === "FROM" ? evt.endDateTime : evt.startDateTime;
 }
 
+// Android Chrome (and most modern browsers in standalone-PWA mode) reject
+// `new Notification(...)` with an "Illegal constructor" error. Notifications
+// must be shown through the service worker registration. We cache the
+// registration once and use it for every alarm fire.
+async function showViaServiceWorker(title: string, opts: NotificationOptions): Promise<boolean> {
+  if (!("serviceWorker" in navigator)) return false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    await reg.showNotification(title, opts);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function useRideAlarms(
   assignments: RideAssignment[],
   events: Event[],
@@ -63,7 +78,7 @@ export function useRideAlarms(
       const child = children.find((c) => c.childId === evt.childId);
       const t = setTimeout(() => {
         if (Notification.permission === "granted") {
-          new Notification("Ride reminder", {
+          void showViaServiceWorker("Ride reminder", {
             body: `${child?.name ?? ""} · ${evt.title} · ${a.rideLeg} at ${new Date(legTime(a, evt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
             tag: a.assignmentId,
           });

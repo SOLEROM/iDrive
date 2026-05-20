@@ -16,9 +16,98 @@ export function SettingsScreen() {
   const isIOSChrome = isIOS && /CriOS/i.test(ua);
   const isIOSSafari = isIOS && !isIOSChrome;
   const [newLocation, setNewLocation] = useState("");
+  const [testLog, setTestLog] = useState<string[]>([]);
+  const [testBusy, setTestBusy] = useState(false);
 
   const set = <K extends keyof AppLocalConfig>(k: K, v: AppLocalConfig[K]) =>
     setConfig({ [k]: v } as Partial<AppLocalConfig>);
+
+  // Test alarm: schedules a notification ~60s out and logs each diagnostic
+  // step so we can tell whether the OS/browser actually fired it. Uses the
+  // Notification Triggers API (survives PWA close) when the runtime exposes
+  // it, otherwise falls back to in-tab setTimeout (foreground-only).
+  const appendLog = (msg: string) =>
+    setTestLog((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+
+  const runTestAlarm = async () => {
+    setTestLog([]);
+    setTestBusy(true);
+    try {
+      appendLog(`UA: ${navigator.userAgent.slice(0, 70)}${navigator.userAgent.length > 70 ? "…" : ""}`);
+      appendLog(`installed (standalone): ${isStandalone}`);
+      if (!("Notification" in window)) {
+        appendLog("FAIL: Notification API not supported in this browser");
+        return;
+      }
+      appendLog(`Notification.permission: ${Notification.permission}`);
+      if (Notification.permission === "default") {
+        appendLog("Requesting permission…");
+        const r = await Notification.requestPermission();
+        appendLog(`permission result: ${r}`);
+      }
+      if (Notification.permission !== "granted") {
+        appendLog("FAIL: permission not granted — enable notifications for this site/app in OS settings");
+        return;
+      }
+      const swSupported = "serviceWorker" in navigator;
+      appendLog(`serviceWorker available: ${swSupported}`);
+      let registration: ServiceWorkerRegistration | null = null;
+      if (swSupported) {
+        try {
+          registration = await navigator.serviceWorker.ready;
+          appendLog(`SW state: ${registration.active?.state ?? "unknown"}, scope: ${registration.scope}`);
+        } catch (e) {
+          appendLog(`SW error: ${(e as Error).message}`);
+        }
+      }
+      const triggersSupported = "TimestampTrigger" in window;
+      appendLog(`TimestampTrigger (background-survives-close): ${triggersSupported}`);
+      appendLog(`navigator.vibrate available: ${"vibrate" in navigator}`);
+
+      const fireAt = Date.now() + 60_000;
+      appendLog(`Scheduling test alarm for ${new Date(fireAt).toLocaleTimeString()} (+60s)`);
+
+      if (triggersSupported && registration) {
+        try {
+          const opts = {
+            body: "Fired via service worker TimestampTrigger",
+            tag: "idrive-test-alarm",
+            showTrigger: new (window as unknown as { TimestampTrigger: new (ts: number) => unknown })
+              .TimestampTrigger(fireAt),
+          } as NotificationOptions;
+          await registration.showNotification("Test alarm", opts);
+          appendLog("Scheduled via SW showTrigger — should fire even if PWA is closed");
+          return;
+        } catch (e) {
+          appendLog(`SW showTrigger failed: ${(e as Error).message} — falling back to in-tab timer`);
+        }
+      }
+
+      appendLog("Using in-tab setTimeout + SW showNotification — only fires while this PWA is open");
+      setTimeout(() => {
+        void (async () => {
+          if (!registration) {
+            appendLog("FAIL: no service worker registration — cannot show notification");
+            return;
+          }
+          try {
+            await registration.showNotification("Test alarm", {
+              body: "Fired via in-tab setTimeout (SW showNotification)",
+              tag: "idrive-test-alarm",
+            });
+            appendLog(`Fired notification at ${new Date().toLocaleTimeString()}`);
+          } catch (e) {
+            appendLog(`showNotification FAIL: ${(e as Error).message}`);
+          }
+          if (config.vibrateOnReminder && "vibrate" in navigator) navigator.vibrate([300, 100, 300]);
+        })();
+      }, fireAt - Date.now());
+    } catch (e) {
+      appendLog(`UNCAUGHT: ${(e as Error).message}`);
+    } finally {
+      setTestBusy(false);
+    }
+  };
 
   const addLocation = () => {
     const loc = newLocation.trim();
@@ -108,6 +197,40 @@ export function SettingsScreen() {
               onChange={(e) => set("soundOnReminder", e.target.checked)} />
             &nbsp;Sound on reminder
           </label>
+
+          <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            <h3 style={{ margin: "0 0 4px", fontSize: 14 }}>Test alarm</h3>
+            <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--muted)" }}>
+              Heads-up: alarms currently use an in-page timer + browser Notification,
+              not Android's system AlarmManager. They reliably fire only while the
+              PWA is open. Tap below to schedule a test in 60 seconds and watch the
+              diagnostic log — keep the app open OR close it to test background firing.
+            </p>
+            <button
+              className="btn btn--full"
+              onClick={runTestAlarm}
+              disabled={testBusy}
+              style={{ marginBottom: 8 }}
+            >
+              {testBusy ? "Scheduling…" : "Schedule test alarm (+60s)"}
+            </button>
+            {testLog.length > 0 && (
+              <pre style={{
+                margin: 0, padding: 8,
+                background: "var(--surface)", border: "1px solid var(--border)",
+                borderRadius: 6, fontSize: 11, lineHeight: 1.35,
+                whiteSpace: "pre-wrap", wordBreak: "break-word",
+                maxHeight: 240, overflow: "auto",
+              }}>
+                {testLog.join("\n")}
+              </pre>
+            )}
+            <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--muted)" }}>
+              For reliable alarms when the app is closed: Android → Settings →
+              Apps → (this PWA) → Notifications ON, Battery → unrestricted.
+              True background alarms require Web Push (not yet wired up).
+            </p>
+          </div>
         </div>
 
         <div className="card">

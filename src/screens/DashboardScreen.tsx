@@ -53,6 +53,9 @@ export function DashboardScreen() {
   const myOpenRides = assignments.filter((a) => {
     if (a.assignmentStatus === AssignmentStatus.UNASSIGNED) return false;
     if (a.assignmentStatus === AssignmentStatus.COMPLETED) return false;
+    // Drop assignments whose event's day is before today — stale, not actionable.
+    const evt = events.find((e) => e.eventId === a.eventId);
+    if (!evt || evt.startDateTime < startOfToday) return false;
     if (a.driverParentId === parent?.parentId) return true;
     if (a.claimedByParentId === parent?.parentId) return true;
     if (isExternalDriver(a.driverParentId)) return true;

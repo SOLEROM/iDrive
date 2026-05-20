@@ -141,6 +141,11 @@ function textColorFor(c: ChildColor): string {
   return DARK_TEXT_COLORS.has(c) ? "#1b1f2a" : "#fff";
 }
 
+// Horizontal swipe must be at least this long and dominate over vertical motion
+// — otherwise a vertical scroll inside .app-main would accidentally page the day.
+const SWIPE_MIN_PX = 50;
+const SWIPE_H_OVER_V = 1.5;
+
 function DayView({
   events, assignments, children, dayMs, language, onPrev, onNext,
 }: {
@@ -164,28 +169,65 @@ function DayView({
   const inDay = events.filter((e) => e.endDateTime >= dayStart && e.startDateTime <= dayEnd);
   const positioned = layoutEvents(inDay, dayStart);
 
-  // Auto-scroll the page to the earliest event (or 7am) on day change.
+  // Trim the visible hour window to first-event-minus-2h .. last-event-plus-2h,
+  // so the grid doesn't waste vertical space on empty hours. Fall back to a
+  // 7am–9pm working window when the day has no events.
+  const DEFAULT_MIN_HOUR = 7;
+  const DEFAULT_MAX_HOUR = 21;
+  const PAD_HOURS = 2;
+  const { minHour, maxHour } = (() => {
+    if (inDay.length === 0) return { minHour: DEFAULT_MIN_HOUR, maxHour: DEFAULT_MAX_HOUR };
+    const firstStartMs = Math.max(dayStart, Math.min(...inDay.map((e) => e.startDateTime)));
+    const lastEndMs = Math.min(dayEnd + 1, Math.max(...inDay.map((e) => e.endDateTime)));
+    const firstHour = Math.floor((firstStartMs - dayStart) / MS_HOUR);
+    const lastHour = Math.ceil((lastEndMs - dayStart) / MS_HOUR);
+    return {
+      minHour: Math.max(0, firstHour - PAD_HOURS),
+      maxHour: Math.min(24, Math.max(firstHour + 1, lastHour) + PAD_HOURS),
+    };
+  })();
+  const gridHours = Math.max(1, maxHour - minHour);
+  const gridHeightPx = gridHours * HOUR_PX;
+  const minOffsetPx = minHour * HOUR_PX;
+
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < SWIPE_MIN_PX) return;
+    if (Math.abs(dx) < Math.abs(dy) * SWIPE_H_OVER_V) return;
+    if (dx > 0) onPrev(); else onNext();
+  };
+
+  // Scroll the page so the trimmed grid is at the top of the viewport.
   const gridRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const main = document.querySelector(".app-main") as HTMLElement | null;
     if (!main || !gridRef.current) return;
-    const earliestMs = inDay.length > 0
-      ? Math.min(...inDay.map((e) => e.startDateTime))
-      : dayStart + 7 * MS_HOUR;
-    const minutes = Math.max(0, (earliestMs - dayStart) / MS_MIN);
-    const targetWithinGrid = (minutes / 60) * HOUR_PX - 60;
     const gridTop = gridRef.current.offsetTop;
-    main.scrollTo({ top: Math.max(0, gridTop + targetWithinGrid), behavior: "auto" });
+    main.scrollTo({ top: Math.max(0, gridTop - 8), behavior: "auto" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayMs]);
 
-  // Now-line position (today only).
+  // Now-line position relative to the trimmed grid (today only).
   const nowOffsetPx = isToday
-    ? ((Date.now() - dayStart) / MS_MIN / 60) * HOUR_PX
+    ? ((Date.now() - dayStart) / MS_MIN / 60) * HOUR_PX - minOffsetPx
     : null;
 
   return (
-    <div>
+    <div
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      style={{ touchAction: "pan-y" }}
+    >
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         marginBottom: 8,
@@ -206,36 +248,39 @@ function DayView({
         ref={gridRef}
         style={{
           position: "relative",
-          height: 24 * HOUR_PX,
+          height: gridHeightPx,
           background: "var(--surface)",
           borderRadius: 12,
           border: "1px solid var(--border)",
           overflow: "hidden",
         }}
       >
-        {/* Hour grid lines + labels */}
-        {Array.from({ length: 24 }, (_, h) => (
-          <div
-            key={h}
-            style={{
-              position: "absolute", left: 0, right: 0,
-              top: h * HOUR_PX, height: HOUR_PX,
-              borderTop: h === 0 ? "none" : "1px solid var(--border)",
-              boxSizing: "border-box",
-            }}
-          >
-            <span style={{
-              position: "absolute", left: 6, top: -8,
-              fontSize: 10, color: "var(--muted)",
-              background: "var(--surface)", padding: "0 4px",
-            }}>
-              {h === 0 ? "" : hourLabel(h, locale)}
-            </span>
-          </div>
-        ))}
+        {/* Hour grid lines + labels — only the visible window */}
+        {Array.from({ length: gridHours }, (_, i) => {
+          const h = minHour + i;
+          return (
+            <div
+              key={h}
+              style={{
+                position: "absolute", left: 0, right: 0,
+                top: i * HOUR_PX, height: HOUR_PX,
+                borderTop: i === 0 ? "none" : "1px solid var(--border)",
+                boxSizing: "border-box",
+              }}
+            >
+              <span style={{
+                position: "absolute", left: 6, top: -8,
+                fontSize: 10, color: "var(--muted)",
+                background: "var(--surface)", padding: "0 4px",
+              }}>
+                {i === 0 ? "" : hourLabel(h, locale)}
+              </span>
+            </div>
+          );
+        })}
 
         {/* Now-line (today only) */}
-        {nowOffsetPx !== null && nowOffsetPx >= 0 && nowOffsetPx <= 24 * HOUR_PX && (
+        {nowOffsetPx !== null && nowOffsetPx >= 0 && nowOffsetPx <= gridHeightPx && (
           <div
             aria-hidden
             style={{
@@ -264,7 +309,7 @@ function DayView({
               to={`/events/${e.eventId.split(":")[0]}`}
               style={{
                 position: "absolute",
-                top: topPx,
+                top: topPx - minOffsetPx,
                 left: `calc(${GUTTER_PX}px + ${leftPct}% - (${GUTTER_PX}px * ${leftPct} / 100))`,
                 width: `calc((100% - ${GUTTER_PX}px - 4px) * ${widthPct} / 100)`,
                 height: heightPx - 2,

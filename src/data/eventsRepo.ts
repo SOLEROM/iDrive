@@ -3,13 +3,27 @@ import type { Event, RideAssignment } from "@/domain/models";
 import { db } from "./firebase";
 import { subCol, subDoc } from "./paths";
 
+// Firestore rejects `undefined` field values — legacy events loaded from
+// older docs can be missing newer fields (description, recurrenceRule, …),
+// so strip undefineds before every write to keep notes / edits syncing.
+function stripUndefined<T extends object>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out as T;
+}
+
 export async function upsertEvent(groupId: string, event: Event): Promise<void> {
   const now = Date.now();
-  await setDoc(subDoc(groupId, "events", event.eventId), {
-    ...event,
-    updatedAt: now,
-    createdAt: event.createdAt || now,
-  });
+  await setDoc(
+    subDoc(groupId, "events", event.eventId),
+    stripUndefined({
+      ...event,
+      updatedAt: now,
+      createdAt: event.createdAt || now,
+    }),
+  );
 }
 
 export async function upsertEvents(groupId: string, events: Event[]): Promise<void> {
@@ -17,11 +31,14 @@ export async function upsertEvents(groupId: string, events: Event[]): Promise<vo
   const now = Date.now();
   const batch = writeBatch(db);
   for (const e of events) {
-    batch.set(subDoc(groupId, "events", e.eventId), {
-      ...e,
-      updatedAt: now,
-      createdAt: e.createdAt || now,
-    });
+    batch.set(
+      subDoc(groupId, "events", e.eventId),
+      stripUndefined({
+        ...e,
+        updatedAt: now,
+        createdAt: e.createdAt || now,
+      }),
+    );
   }
   await batch.commit();
 }
