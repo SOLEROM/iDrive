@@ -101,6 +101,11 @@ const STRINGS = {
   externalDriver:        { en: "External driver",                   he: "נהג חיצוני" },
   cancel:                { en: "Cancel",                            he: "ביטול" },
   assign:                { en: "Assign",                            he: "שייך" },
+  addTask:               { en: "Add task",                          he: "הוסף משימה" },
+  taskDescription:       { en: "Short description",                 he: "תיאור קצר" },
+  dueTime:               { en: "Due time",                          he: "זמן לביצוע" },
+  save:                  { en: "Save",                              he: "שמור" },
+  personalTask:          { en: "Task",                              he: "משימה" },
 } as const;
 
 export type StringKey = keyof typeof STRINGS;

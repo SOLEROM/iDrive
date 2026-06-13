@@ -3,12 +3,14 @@ import { Link, useNavigate } from "react-router-dom";
 import { Header } from "@/components/Header";
 import { useApp } from "@/state/AppContext";
 import { useRideAlarms } from "@/state/useRideAlarms";
+import { usePersonalTasks } from "@/state/usePersonalTasks";
+import { usePersonalTaskAlarms } from "@/state/usePersonalTaskAlarms";
 import { AlarmToggle } from "@/components/AlarmToggle";
 import { fmtDateTime } from "@/lib/format";
 import { localeFor, t } from "@/lib/i18n";
 import { ChildBadge } from "@/components/ChildBadge";
 import { AssignmentStatus, ChildColor, ChildColorHex, EventStatus, RideDirection, isExternalDriver } from "@/domain/enums";
-import { todayStart, endOfDay, endOfWeek, endOfMonth } from "@/domain/timeWindow";
+import { todayStart, endOfDay, endOfWeek, endOfMonth, isoDateLocal } from "@/domain/timeWindow";
 const _endOfToday = () => endOfDay(todayStart());
 import { RideStatusChip } from "@/components/RideStatusChip";
 
@@ -18,8 +20,34 @@ export function DashboardScreen() {
   const navigate = useNavigate();
   const { parent, children, events, assignments, upsertAssignment, config } = useApp();
   const { isAlarmOn, getLeadMinutes, enableAlarm, disableAlarm } = useRideAlarms(assignments, events, children, config);
+  const { tasks, addTask, removeTask, updateTask } = usePersonalTasks();
+  const taskAlarms = usePersonalTaskAlarms(tasks, config);
   const childColorMap = new Map(children.map((c) => [c.childId, ChildColorHex[c.colorTag]]));
   const [range, setRange] = useState<UpcomingRange>("1d");
+  const [showTaskForm, setShowTaskForm] = useState(false);
+  const [taskDesc, setTaskDesc] = useState("");
+  const [taskDue, setTaskDue] = useState(() => defaultDueLocal());
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editDesc, setEditDesc] = useState("");
+  const [editDue, setEditDue] = useState("");
+
+  const startEditTask = (id: string) => {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    setEditingTaskId(id);
+    setEditDesc(task.description);
+    setEditDue(msToLocalInput(task.dueAt));
+  };
+  const cancelEditTask = () => { setEditingTaskId(null); setEditDesc(""); setEditDue(""); };
+  const saveEditTask = () => {
+    if (!editingTaskId) return;
+    const desc = editDesc.trim();
+    if (!desc) return;
+    const ms = new Date(editDue).getTime();
+    if (!Number.isFinite(ms)) return;
+    updateTask(editingTaskId, desc, ms);
+    cancelEditTask();
+  };
 
   const startOfToday = todayStart();
   const endOfToday = _endOfToday();
@@ -68,6 +96,19 @@ export function DashboardScreen() {
     return timeA - timeB;
   });
 
+  const sortedTasks = [...tasks].sort((a, b) => a.dueAt - b.dueAt);
+
+  const submitTask = () => {
+    const desc = taskDesc.trim();
+    if (!desc) return;
+    const ms = new Date(taskDue).getTime();
+    if (!Number.isFinite(ms)) return;
+    addTask(desc, ms);
+    setTaskDesc("");
+    setTaskDue(defaultDueLocal());
+    setShowTaskForm(false);
+  };
+
   const weekEnd = endOfWeek();
   const monthEnd = endOfMonth();
 
@@ -103,8 +144,127 @@ export function DashboardScreen() {
       />
       <main className="app-main">
         <section>
-          <h2 style={sH}>{t("myRides", config.language)}</h2>
-          {myOpenRides.length === 0 && <div className="card empty">{t("nothingOnYourPlate", config.language)}</div>}
+          <div className="row row--between" style={{ margin: "20px 4px 8px", alignItems: "center" }}>
+            <h2 style={{ ...sH, margin: 0 }}>{t("myRides", config.language)}</h2>
+            <button
+              onClick={() => setShowTaskForm((v) => !v)}
+              aria-label={t("addTask", config.language)}
+              title={t("addTask", config.language)}
+              style={{
+                background: showTaskForm ? "var(--primary)" : "transparent",
+                color: showTaskForm ? "#fff" : "var(--fg)",
+                border: "1px solid var(--border)",
+                borderRadius: 999,
+                width: 28, height: 28,
+                lineHeight: 1,
+                fontSize: 18, fontWeight: 600,
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >+</button>
+          </div>
+          {showTaskForm && (
+            <div className="card" style={{ borderLeft: "4px solid var(--primary)" }}>
+              <input
+                className="input"
+                type="text"
+                placeholder={t("taskDescription", config.language)}
+                value={taskDesc}
+                onChange={(e) => setTaskDesc(e.target.value)}
+                autoFocus
+              />
+              <input
+                className="input"
+                type="datetime-local"
+                style={{ marginTop: 8 }}
+                value={taskDue}
+                onChange={(e) => setTaskDue(e.target.value)}
+              />
+              <div className="row" style={{ gap: 8, marginTop: 10 }}>
+                <button
+                  className="btn btn--full"
+                  style={{ minHeight: "auto", padding: "10px" }}
+                  onClick={submitTask}
+                  disabled={!taskDesc.trim()}
+                >{t("save", config.language)}</button>
+                <button
+                  className="btn btn--ghost btn--full"
+                  style={{ minHeight: "auto", padding: "10px" }}
+                  onClick={() => { setShowTaskForm(false); setTaskDesc(""); }}
+                >{t("cancel", config.language)}</button>
+              </div>
+            </div>
+          )}
+          {myOpenRides.length === 0 && sortedTasks.length === 0 && (
+            <div className="card empty">{t("nothingOnYourPlate", config.language)}</div>
+          )}
+          {sortedTasks.map((task) => {
+            const isEditing = editingTaskId === task.id;
+            return (
+              <div className="card" key={task.id} style={{ borderLeft: "4px solid var(--primary)" }}>
+                {isEditing ? (
+                  <>
+                    <input
+                      className="input"
+                      type="text"
+                      placeholder={t("taskDescription", config.language)}
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      autoFocus
+                    />
+                    <input
+                      className="input"
+                      type="datetime-local"
+                      style={{ marginTop: 8 }}
+                      value={editDue}
+                      onChange={(e) => setEditDue(e.target.value)}
+                    />
+                    <div className="row" style={{ gap: 8, marginTop: 10 }}>
+                      <button
+                        className="btn btn--full"
+                        style={{ minHeight: "auto", padding: "10px" }}
+                        onClick={saveEditTask}
+                        disabled={!editDesc.trim()}
+                      >{t("save", config.language)}</button>
+                      <button
+                        className="btn btn--ghost btn--full"
+                        style={{ minHeight: "auto", padding: "10px" }}
+                        onClick={cancelEditTask}
+                      >{t("cancel", config.language)}</button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="row row--between" style={{ alignItems: "flex-start" }}>
+                    <div
+                      style={{ cursor: "pointer", flex: 1 }}
+                      onClick={() => startEditTask(task.id)}
+                      title={t("addTask", config.language)}
+                    >
+                      <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                        <span className="chip">{t("personalTask", config.language)}</span>
+                        <strong>{task.description}</strong>
+                      </div>
+                      <p style={{ margin: "2px 0 0" }}>{fmtDateTime(task.dueAt, config.language)}</p>
+                    </div>
+                    <div className="row" style={{ gap: 8, flexShrink: 0, alignItems: "center" }}>
+                      <AlarmToggle
+                        isOn={taskAlarms.isAlarmOn(task.id)}
+                        leadMinutes={taskAlarms.getLeadMinutes(task.id)}
+                        onEnable={(mins) => void taskAlarms.enableAlarm(task.id, mins)}
+                        onDisable={() => taskAlarms.disableAlarm(task.id)}
+                        stopPropagation
+                      />
+                      <button
+                        className="btn"
+                        style={{ padding: "4px 10px", minHeight: "auto", fontSize: 12 }}
+                        onClick={() => removeTask(task.id)}
+                      >{t("done", config.language)}</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {myOpenRides.map((a) => {
             const evt = events.find((e) => e.eventId === a.eventId);
             const hex = evt ? childColorMap.get(evt.childId) : undefined;
@@ -268,6 +428,24 @@ const sH: React.CSSProperties = {
   margin: "20px 4px 8px", fontSize: 13,
   textTransform: "uppercase", letterSpacing: 0.5, color: "var(--muted)",
 };
+
+// Format an absolute ms timestamp as the YYYY-MM-DDTHH:mm string that
+// <input type="datetime-local"> expects, in local time.
+function msToLocalInput(ms: number): string {
+  const d = new Date(ms);
+  const date = isoDateLocal(ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${date}T${hh}:${mm}`;
+}
+
+// Default due-time for the new-task form: today at the next half-hour.
+function defaultDueLocal(): string {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() + (30 - (now.getMinutes() % 30)));
+  now.setSeconds(0, 0);
+  return msToLocalInput(now.getTime());
+}
 
 function rangeBtn(active: boolean): React.CSSProperties {
   return {
