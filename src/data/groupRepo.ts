@@ -5,6 +5,7 @@ import { groupDoc } from "./paths";
 export interface SharedConfig {
   globalLocations: string[];
   globalActivities: Activity[];
+  globalExternalDrivers: string[];
 }
 
 // Refresh roster on every sign-in. Always a blind merge of groupName +
@@ -48,6 +49,7 @@ export function listenSharedConfig(
     cb({
       globalLocations: (d.globalLocations as string[]) ?? [],
       globalActivities: (d.globalActivities as Activity[]) ?? [],
+      globalExternalDrivers: (d.globalExternalDrivers as string[]) ?? [],
     });
   });
 }

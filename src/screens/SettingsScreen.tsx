@@ -16,6 +16,7 @@ export function SettingsScreen() {
   const isIOSChrome = isIOS && /CriOS/i.test(ua);
   const isIOSSafari = isIOS && !isIOSChrome;
   const [newLocation, setNewLocation] = useState("");
+  const [newDriver, setNewDriver] = useState("");
   const [testLog, setTestLog] = useState<string[]>([]);
   const [testBusy, setTestBusy] = useState(false);
 
@@ -118,6 +119,17 @@ export function SettingsScreen() {
 
   const removeLocation = (loc: string) => {
     set("globalLocations", config.globalLocations.filter((l) => l !== loc));
+  };
+
+  const addDriver = () => {
+    const name = newDriver.trim();
+    if (!name || config.globalExternalDrivers.includes(name)) return;
+    setNewDriver("");
+    set("globalExternalDrivers", [...config.globalExternalDrivers, name]);
+  };
+
+  const removeDriver = (name: string) => {
+    set("globalExternalDrivers", config.globalExternalDrivers.filter((d) => d !== name));
   };
 
   return (
@@ -256,6 +268,36 @@ export function SettingsScreen() {
               onChange={(e) => setNewLocation(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") addLocation(); }} />
             <button className="btn" onClick={addLocation}>Add</button>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>External drivers</h2>
+          <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--muted)" }}>
+            Non-member drivers you can assign a ride to. They show up (in red)
+            in the driver picker on the Rides Board.
+          </p>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            {config.globalExternalDrivers.map((name) => (
+              <span key={name} className="chip" style={{ color: "#ef4444" }}>
+                {name}&nbsp;
+                <button
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "#ef4444" }}
+                  onClick={() => removeDriver(name)}
+                  aria-label={`Remove ${name}`}
+                >×</button>
+              </span>
+            ))}
+            {config.globalExternalDrivers.length === 0 && (
+              <span className="chip chip--muted">None</span>
+            )}
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <input className="input" style={{ flex: 1 }} placeholder="Add driver…"
+              value={newDriver}
+              onChange={(e) => setNewDriver(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addDriver(); }} />
+            <button className="btn" onClick={addDriver}>Add</button>
           </div>
         </div>
 

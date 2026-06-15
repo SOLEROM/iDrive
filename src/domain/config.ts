@@ -33,6 +33,8 @@ export interface AppLocalConfig extends LocalConfig {
   activeParentId: string;
   globalActivities: Activity[];
   globalLocations: string[];
+  /** Saved non-member ("external") drivers — picker options shared by the group. */
+  globalExternalDrivers: string[];
 }
 
 export const defaultAppLocalConfig: AppLocalConfig = {
@@ -42,4 +44,5 @@ export const defaultAppLocalConfig: AppLocalConfig = {
   activeParentId: "",
   globalActivities: [],
   globalLocations: [],
+  globalExternalDrivers: [],
 };

@@ -7,7 +7,7 @@ import {
   deleteEventCascade, deleteEventsCascade,
 } from "@/data/eventsRepo";
 import { upsertAssignment as repoUpsertAssignment } from "@/data/assignmentsRepo";
-import { patchSharedConfig } from "@/data/groupRepo";
+import { patchSharedConfig, type SharedConfig } from "@/data/groupRepo";
 import { findFamily } from "@/data/familiesBundle";
 import type { AppParent } from "@/data/parentsRepo";
 import { defaultAppLocalConfig, type AppLocalConfig } from "@/domain/config";
@@ -52,7 +52,7 @@ interface AppContextValue {
 
 const Ctx = createContext<AppContextValue | null>(null);
 
-const SHARED_KEYS = new Set(["globalLocations", "globalActivities"]);
+const SHARED_KEYS = new Set(["globalLocations", "globalActivities", "globalExternalDrivers"]);
 
 export function AppProvider({ children: reactChildren }: { children: React.ReactNode }) {
   const { isLoading, authUser, groupId, authError } = useAuth();
@@ -76,6 +76,7 @@ export function AppProvider({ children: reactChildren }: { children: React.React
     ...local,
     globalLocations: sharedConfig.globalLocations,
     globalActivities: sharedConfig.globalActivities,
+    globalExternalDrivers: sharedConfig.globalExternalDrivers,
     loginName: parent?.displayName ?? "",
     loginEmail: authUser?.email ?? "",
     activeParentId: authUser?.uid ?? "",
@@ -111,7 +112,7 @@ export function AppProvider({ children: reactChildren }: { children: React.React
       else localUpdates[k] = v;
     }
     if (Object.keys(sharedUpdates).length > 0 && groupId) {
-      await patchSharedConfig(groupId, sharedUpdates as Record<"globalLocations" | "globalActivities", never>);
+      await patchSharedConfig(groupId, sharedUpdates as Partial<SharedConfig>);
     }
     if (Object.keys(localUpdates).length > 0) {
       patchLocal(localUpdates as Partial<AppLocalConfig>);

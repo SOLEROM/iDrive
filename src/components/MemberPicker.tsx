@@ -5,6 +5,10 @@ interface Props {
   parents: AppParent[];
   meId: string;
   onPick: (parentId: string, displayName: string) => void;
+  /** Saved non-member drivers — shown (red) above the "Other…" entry. */
+  externalDrivers?: string[];
+  /** Picks a saved external driver by name. */
+  onPickExternal?: (name: string) => void;
   /** Optional "Other…" handler — the parent should prompt for a free-text name. */
   onPickOther?: () => void;
   otherLabel?: string;
@@ -12,10 +16,13 @@ interface Props {
 }
 
 /**
- * Tiny popover for picking a driver — me first, then the rest, then an
- * optional "Other…" entry for an external (non-member) driver.
+ * Tiny popover for picking a driver — me first, then the rest, then any
+ * saved external (non-member) drivers, then an optional "Other…" entry to
+ * add a new external driver.
  */
-export function MemberPicker({ parents, meId, onPick, onPickOther, otherLabel, onClose }: Props) {
+export function MemberPicker({
+  parents, meId, onPick, externalDrivers, onPickExternal, onPickOther, otherLabel, onClose,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -74,6 +81,22 @@ export function MemberPicker({ parents, meId, onPick, onPickOther, otherLabel, o
         <div style={{ padding: 8, fontSize: 11, color: "var(--muted)" }}>
           To add members, edit families.yaml.
         </div>
+      )}
+      {externalDrivers && externalDrivers.length > 0 && onPickExternal && (
+        <>
+          <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+          {externalDrivers.map((name) => (
+            <button
+              type="button"
+              role="menuitem"
+              key={name}
+              onClick={(e) => { e.stopPropagation(); onPickExternal(name); onClose(); }}
+              style={{ ...pickerBtn(false), color: "#ef4444" }}
+            >
+              {name}
+            </button>
+          ))}
+        </>
       )}
       {onPickOther && (
         <>

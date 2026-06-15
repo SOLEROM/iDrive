@@ -21,7 +21,7 @@ const CONFIG_KEYS: (keyof AppLocalConfig)[] = [
   "loginName", "loginEmail", "activeParentId", "themeMode", "language", "defaultLandingScreen",
   "showCompletedRidesByDefault", "compactCardMode", "vibrateOnReminder",
   "soundOnReminder", "notificationLeadTimeMinutesDefault", "debugLoggingEnabled",
-  "globalActivities", "globalLocations",
+  "globalActivities", "globalLocations", "globalExternalDrivers",
 ];
 
 function buildConfigSheet(

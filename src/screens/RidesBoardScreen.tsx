@@ -18,7 +18,7 @@ export function RidesBoardScreen() {
   const navigate = useNavigate();
   const {
     parent, parents, children, events, assignments, config,
-    upsertAssignment, upsertEvent,
+    upsertAssignment, upsertEvent, setConfig,
   } = useApp();
   const [filterChildId, setFilterChildId] = useState<string>("");
   const [filterMine, setFilterMine] = useState(false);
@@ -289,6 +289,8 @@ export function RidesBoardScreen() {
                           <MemberPicker
                             parents={parents}
                             meId={parent.parentId}
+                            externalDrivers={config.globalExternalDrivers}
+                            onPickExternal={(name) => tryAccept(e.eventId, leg, EXTERNAL_DRIVER_ID, name)}
                             otherLabel={t("otherDots", config.language)}
                             onPick={(pid, pname) => tryAccept(e.eventId, leg, pid, pname)}
                             onPickOther={() => {
@@ -333,6 +335,10 @@ export function RidesBoardScreen() {
             const name = otherDraft.trim();
             if (!name) return;
             tryAccept(otherPrompt.eventId, otherPrompt.leg, EXTERNAL_DRIVER_ID, name);
+            // Remember this driver so it appears in the picker next time.
+            if (!config.globalExternalDrivers.includes(name)) {
+              void setConfig({ globalExternalDrivers: [...config.globalExternalDrivers, name] });
+            }
             setOtherPrompt(null);
           }}
         />

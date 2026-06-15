@@ -16,7 +16,7 @@ export interface GroupData {
 
 const EMPTY: GroupData = {
   parents: [], children: [], events: [], assignments: [],
-  sharedConfig: { globalLocations: [], globalActivities: [] },
+  sharedConfig: { globalLocations: [], globalActivities: [], globalExternalDrivers: [] },
 };
 
 export function useGroupData(groupId: string | null): GroupData {
